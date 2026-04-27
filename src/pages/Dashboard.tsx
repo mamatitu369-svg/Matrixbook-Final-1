@@ -110,22 +110,42 @@ export default function Dashboard() {
 
   /* ── Realtime Firestore listener ── */
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setItems([]);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    // NOTE: We deliberately omit `orderBy` so Firestore doesn't require a
+    // composite index (where + orderBy). We sort client-side instead — this
+    // keeps the dashboard working out-of-the-box without manual index setup.
     const q = query(
       collection(db, "generations"),
       where("user_id", "==", user.uid),
-      orderBy("created_at", "desc")
     );
     const unsub = onSnapshot(
       q,
       (snap) => {
-        setItems(
-          snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Gen, "id">) }))
-        );
+        const docs = snap.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as Omit<Gen, "id">),
+        }));
+        // Newest first
+        docs.sort((a, b) => {
+          const ta = new Date(a.created_at || 0).getTime();
+          const tb = new Date(b.created_at || 0).getTime();
+          return tb - ta;
+        });
+        setItems(docs);
         setLoading(false);
       },
       (err) => {
-        toast.error("Failed to load: " + err.message);
+        console.error("Firestore listener error:", err);
+        toast.error(
+          err.code === "permission-denied"
+            ? "Firestore rules are blocking reads — allow `generations` for authenticated users"
+            : "Failed to load: " + err.message
+        );
         setLoading(false);
       }
     );
