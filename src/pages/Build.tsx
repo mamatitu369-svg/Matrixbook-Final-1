@@ -300,6 +300,20 @@ export default function Build() {
         </div>
 
         <div className="flex items-center gap-1">
+          {history.length > 0 && (
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => setShowHistory((v) => !v)}
+              title="Chat history"
+              className="text-white/70 hover:text-white relative"
+            >
+              <MessageSquare className="w-4 h-4" />
+              <span className="absolute -top-0.5 -right-0.5 bg-blue-500 text-[9px] rounded-full w-3.5 h-3.5 flex items-center justify-center font-mono">
+                {history.filter((h) => h.role === "user").length}
+              </span>
+            </Button>
+          )}
           {html && (
             <>
               <Button
