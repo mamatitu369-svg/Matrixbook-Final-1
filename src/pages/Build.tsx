@@ -18,21 +18,9 @@ import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
 import { collection, addDoc } from "firebase/firestore";
 import { db } from "@/integrations/firebase/config";
+import { CODESTRAL_CHAT_URL, explainCodestralError, getCodestralHeaders } from "@/lib/codestral";
 
 type Device = "desktop" | "tablet" | "mobile";
-
-// ── Codestral — routed through Netlify Function proxy ────────────
-// The proxy at /api/codestral/* injects the API key server-side.
-// VITE_CODESTRAL_API_KEY is only used as a local dev fallback.
-const CODESTRAL_API_KEY = import.meta.env.VITE_CODESTRAL_API_KEY as string | undefined;
-const CODESTRAL_CHAT_URL = "/api/codestral/v1/chat/completions";
-
-if (!CODESTRAL_API_KEY) {
-  console.warn(
-    "[Matrix AI] VITE_CODESTRAL_API_KEY is not set in .env — local dev requests to /api/codestral will fail. " +
-    "Add VITE_CODESTRAL_API_KEY=your_key to your .env file and restart the dev server."
-  );
-}
 
 const BASE_SYSTEM = `You are MATRIX-AI, an expert web developer powered by Codestral.
 
