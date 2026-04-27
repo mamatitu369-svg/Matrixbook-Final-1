@@ -150,13 +150,9 @@ export default function AuthPage() {
               >
                 <div className="w-6 h-6 rounded-full bg-gradient-primary flex items-center justify-center shrink-0 shadow-lg shadow-primary/30">
                   <Sparkles className="w-3 h-3 text-primary-foreground" />
-                </div>
-                {line}
-              </div>
-            ))}
-          </div>
-            ))}
-          </div>
+                
+              
+            
         </div>
 
         <p className="relative z-10 text-xs text-muted-foreground font-mono">
