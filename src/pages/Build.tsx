@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   Code2,
@@ -11,14 +11,18 @@ import {
   Monitor,
   Tablet,
   Rocket,
+  MessageSquare,
+  Sparkles,
 } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
-import { collection, addDoc } from "firebase/firestore";
+import { collection, addDoc, doc, updateDoc } from "firebase/firestore";
 import { db } from "@/integrations/firebase/config";
 import { CODESTRAL_CHAT_URL, explainCodestralError, getCodestralHeaders } from "@/lib/codestral";
+
+type ChatTurn = { role: "user" | "assistant"; content: string };
 
 type Device = "desktop" | "tablet" | "mobile";
 
@@ -91,6 +95,10 @@ export default function Build() {
   const [tab, setTab] = useState<"preview" | "code">("preview");
   const [scale, setScale] = useState(1);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [history, setHistory] = useState<ChatTurn[]>([]);
+  const [docId, setDocId] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const didAutoRun = useRef(false);
 
   useEffect(() => {
     const resize = () => setIsMobile(window.innerWidth < 768);
@@ -98,16 +106,19 @@ export default function Build() {
     return () => window.removeEventListener("resize", resize);
   }, []);
 
-  // Auto-run if prompt came from navigation state
+  // Auto-run if prompt came from navigation state — guard against StrictMode double-mount
   useEffect(() => {
     const p = (location.state as any)?.prompt;
-    if (p) run(p);
+    if (p && !didAutoRun.current) {
+      didAutoRun.current = true;
+      run(p);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── AI generation via Codestral ────────────────────────────────
   const callCodestral = async (
-    prompt: string,
+    messages: { role: string; content: string }[],
     attempt = 1,
   ): Promise<Response> => {
     const headers = getCodestralHeaders();
@@ -123,25 +134,16 @@ export default function Build() {
         signal: controller.signal,
         body: JSON.stringify({
           model: "codestral-latest",
-          messages: [
-            { role: "system", content: BASE_SYSTEM },
-            {
-              role: "user",
-              content: `Build the following as a complete, beautiful, fully working HTML page. Output ONLY the HTML, nothing else:\n\n${prompt}`,
-            },
-          ],
+          messages,
           temperature: 0.15,
-          // Smaller token budget = much lower chance of upstream 504 timeout.
-          // A complete one-page HTML rarely exceeds ~3-4k tokens anyway.
           max_tokens: 2048,
         }),
       });
 
-      // Auto-retry once on transient gateway errors
       if ((r.status === 502 || r.status === 503 || r.status === 504) && attempt < 2) {
         console.warn(`Codestral ${r.status} — retrying (attempt ${attempt + 1})`);
         await new Promise((res) => setTimeout(res, 1500));
-        return callCodestral(prompt, attempt + 1);
+        return callCodestral(messages, attempt + 1);
       }
       return r;
     } finally {
@@ -150,16 +152,40 @@ export default function Build() {
   };
 
   const run = async (prompt: string) => {
-    if (!prompt.trim()) return;
+    if (!prompt.trim() || loading) return;
     setLoading(true);
-    setHtml("");
+    // Clear input immediately so user can keep typing
+    setDraft("");
+
+    const isFollowUp = html.length > 0;
+    const userTurn: ChatTurn = { role: "user", content: prompt };
+    const newHistory: ChatTurn[] = [...history, userTurn];
+    setHistory(newHistory);
 
     try {
+      // Build the message list. For follow-ups, include previous HTML so the
+      // model can iterate on it instead of starting from scratch.
+      const messages: { role: string; content: string }[] = [
+        { role: "system", content: BASE_SYSTEM },
+      ];
+
+      if (isFollowUp) {
+        messages.push({
+          role: "user",
+          content: `Here is the current HTML page you previously generated:\n\n${html}\n\nNow apply this change and output the FULL updated HTML page only:\n\n${prompt}`,
+        });
+      } else {
+        messages.push({
+          role: "user",
+          content: `Build the following as a complete, beautiful, fully working HTML page. Output ONLY the HTML, nothing else:\n\n${prompt}`,
+        });
+      }
+
       let generatedHtml = "";
 
       let r: Response;
       try {
-        r = await callCodestral(prompt);
+        r = await callCodestral(messages);
       } catch (networkErr: any) {
         const aborted = networkErr?.name === "AbortError";
         console.error("Network error calling Codestral:", networkErr);
@@ -168,7 +194,7 @@ export default function Build() {
             ? "AI request timed out — try a shorter prompt"
             : "Network error — check your connection",
         );
-        setHtml(fallbackHTML(prompt));
+        if (!isFollowUp) setHtml(fallbackHTML(prompt));
         return;
       }
 
@@ -184,37 +210,52 @@ export default function Build() {
         try { errBody = await r.text(); } catch { /* ignore */ }
         console.error(`Codestral ${r.status}:`, errBody);
         toast.error(explainCodestralError(r.status));
-        generatedHtml = fallbackHTML(prompt);
+        if (!isFollowUp) generatedHtml = fallbackHTML(prompt);
       }
 
       generatedHtml = cleanHTML(generatedHtml);
       if (!generatedHtml || generatedHtml.length < 80) {
+        if (isFollowUp) {
+          // Don't wipe a working page on a bad follow-up
+          return;
+        }
         generatedHtml = fallbackHTML(prompt);
       }
       generatedHtml = ensureHTML(generatedHtml);
 
       setHtml(generatedHtml);
-      toast.success("Build Ready 🚀");
+      setHistory([...newHistory, { role: "assistant", content: "✓ Updated the page." }]);
+      toast.success(isFollowUp ? "Updated 🎨" : "Build Ready 🚀");
 
-      // Auto-save to Firestore if signed in
+      // Persist to Firestore — create on first turn, update on follow-ups
       if (user) {
         try {
-          await addDoc(collection(db, "generations"), {
-            user_id: user.uid,
-            prompt,
-            html: generatedHtml,
-            title: prompt.slice(0, 60),
-            created_at: new Date().toISOString(),
-          });
-        } catch {
-          // Silent — don't block the user if Firestore save fails
+          if (!docId) {
+            const created = await addDoc(collection(db, "generations"), {
+              user_id: user.uid,
+              prompt,
+              html: generatedHtml,
+              title: prompt.slice(0, 60),
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            });
+            setDocId(created.id);
+          } else {
+            await updateDoc(doc(db, "generations", docId), {
+              html: generatedHtml,
+              updated_at: new Date().toISOString(),
+            });
+          }
+        } catch (saveErr) {
+          console.warn("Firestore save failed:", saveErr);
         }
       }
     } catch (e: any) {
       console.error("run() error:", e);
       toast.error(e?.message ?? "Generation failed");
-      setHtml(fallbackHTML(prompt));
+      if (!html) setHtml(fallbackHTML(prompt));
     } finally {
+      // Always release the input — this is the key fix for the "stuck" chat
       setLoading(false);
     }
   };
@@ -259,6 +300,20 @@ export default function Build() {
         </div>
 
         <div className="flex items-center gap-1">
+          {history.length > 0 && (
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => setShowHistory((v) => !v)}
+              title="Chat history"
+              className="text-white/70 hover:text-white relative"
+            >
+              <MessageSquare className="w-4 h-4" />
+              <span className="absolute -top-0.5 -right-0.5 bg-blue-500 text-[9px] rounded-full w-3.5 h-3.5 flex items-center justify-center font-mono">
+                {history.filter((h) => h.role === "user").length}
+              </span>
+            </Button>
+          )}
           {html && (
             <>
               <Button
@@ -418,6 +473,12 @@ export default function Build() {
 
       {/* ── Floating prompt input ── */}
       <div className="shrink-0 px-4 pb-4 pt-2">
+        {html && !loading && (
+          <p className="text-center text-[11px] text-white/40 mb-2 font-mono">
+            <Sparkles className="w-3 h-3 inline mr-1 text-blue-400" />
+            Keep iterating — try "make the hero darker" or "add a contact form"
+          </p>
+        )}
         <div className="flex items-center gap-2 bg-white/10 backdrop-blur-lg rounded-2xl px-4 py-3 border border-white/10 focus-within:border-blue-500/50 transition-colors max-w-2xl mx-auto">
           <input
             value={draft}
@@ -428,7 +489,11 @@ export default function Build() {
                 run(draft);
               }
             }}
-            placeholder="Describe what to build..."
+            placeholder={
+              html
+                ? "What should we change next?"
+                : "Describe what to build..."
+            }
             className="flex-1 bg-transparent outline-none text-sm placeholder:text-white/30"
             disabled={loading}
           />
@@ -446,6 +511,52 @@ export default function Build() {
           </Button>
         </div>
       </div>
+
+      {/* ── Chat history side panel ── */}
+      {showHistory && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex justify-end"
+          onClick={() => setShowHistory(false)}
+        >
+          <aside
+            className="w-full max-w-sm h-full bg-zinc-950 border-l border-white/10 flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
+              <span className="font-semibold text-sm">Conversation</span>
+              <button
+                onClick={() => setShowHistory(false)}
+                className="text-white/50 hover:text-white text-xs"
+              >
+                Close
+              </button>
+            </header>
+            <div className="flex-1 overflow-auto p-4 space-y-3">
+              {history.length === 0 ? (
+                <p className="text-xs text-white/40 text-center mt-8">
+                  No messages yet
+                </p>
+              ) : (
+                history.map((m, i) => (
+                  <div
+                    key={i}
+                    className={`text-sm rounded-xl px-3 py-2 ${
+                      m.role === "user"
+                        ? "bg-blue-600/20 border border-blue-500/30 ml-6"
+                        : "bg-white/5 border border-white/10 mr-6"
+                    }`}
+                  >
+                    <p className="text-[10px] font-mono text-white/40 mb-0.5">
+                      {m.role === "user" ? "You" : "MATRIX-AI"}
+                    </p>
+                    <p className="text-white/90 whitespace-pre-wrap">{m.content}</p>
+                  </div>
+                ))
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
 
       {/* Mobile preview FAB */}
       {isMobile && html && (
