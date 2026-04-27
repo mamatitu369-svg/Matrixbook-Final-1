@@ -473,6 +473,12 @@ export default function Build() {
 
       {/* ── Floating prompt input ── */}
       <div className="shrink-0 px-4 pb-4 pt-2">
+        {html && !loading && (
+          <p className="text-center text-[11px] text-white/40 mb-2 font-mono">
+            <Sparkles className="w-3 h-3 inline mr-1 text-blue-400" />
+            Keep iterating — try "make the hero darker" or "add a contact form"
+          </p>
+        )}
         <div className="flex items-center gap-2 bg-white/10 backdrop-blur-lg rounded-2xl px-4 py-3 border border-white/10 focus-within:border-blue-500/50 transition-colors max-w-2xl mx-auto">
           <input
             value={draft}
@@ -483,7 +489,11 @@ export default function Build() {
                 run(draft);
               }
             }}
-            placeholder="Describe what to build..."
+            placeholder={
+              html
+                ? "What should we change next?"
+                : "Describe what to build..."
+            }
             className="flex-1 bg-transparent outline-none text-sm placeholder:text-white/30"
             disabled={loading}
           />
@@ -501,6 +511,52 @@ export default function Build() {
           </Button>
         </div>
       </div>
+
+      {/* ── Chat history side panel ── */}
+      {showHistory && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex justify-end"
+          onClick={() => setShowHistory(false)}
+        >
+          <aside
+            className="w-full max-w-sm h-full bg-zinc-950 border-l border-white/10 flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
+              <span className="font-semibold text-sm">Conversation</span>
+              <button
+                onClick={() => setShowHistory(false)}
+                className="text-white/50 hover:text-white text-xs"
+              >
+                Close
+              </button>
+            </header>
+            <div className="flex-1 overflow-auto p-4 space-y-3">
+              {history.length === 0 ? (
+                <p className="text-xs text-white/40 text-center mt-8">
+                  No messages yet
+                </p>
+              ) : (
+                history.map((m, i) => (
+                  <div
+                    key={i}
+                    className={`text-sm rounded-xl px-3 py-2 ${
+                      m.role === "user"
+                        ? "bg-blue-600/20 border border-blue-500/30 ml-6"
+                        : "bg-white/5 border border-white/10 mr-6"
+                    }`}
+                  >
+                    <p className="text-[10px] font-mono text-white/40 mb-0.5">
+                      {m.role === "user" ? "You" : "MATRIX-AI"}
+                    </p>
+                    <p className="text-white/90 whitespace-pre-wrap">{m.content}</p>
+                  </div>
+                ))
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
 
       {/* Mobile preview FAB */}
       {isMobile && html && (
