@@ -84,7 +84,17 @@ export default function AuthPage() {
       await signInWithPopup(auth, googleProvider);
       toast.success("Signed in with Google");
     } catch (err: any) {
-      if (err?.code !== "auth/popup-closed-by-user") {
+      const code = err?.code;
+      if (code === "auth/popup-closed-by-user" || code === "auth/cancelled-popup-request") {
+        // user cancelled — silent
+      } else if (code === "auth/unauthorized-domain") {
+        toast.error(
+          `Add "${window.location.hostname}" to Firebase → Authentication → Settings → Authorized domains`,
+          { duration: 8000 },
+        );
+      } else if (code === "auth/popup-blocked") {
+        toast.error("Popup blocked — allow popups for this site");
+      } else {
         toast.error(err?.message ?? "Google sign-in failed");
       }
     } finally {
@@ -140,7 +150,9 @@ export default function AuthPage() {
           {/* Floating stat cards */}
           <div className="mt-12 flex gap-4">
             {[
-        
+              { label: "AVG BUILD", value: "12s" },
+              { label: "TEMPLATES", value: "60+" },
+              { label: "USERS", value: "10k+" },
             ].map((s) => (
               <div
                 key={s.label}
