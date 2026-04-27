@@ -140,7 +140,9 @@ export default function AuthPage() {
           {/* Floating stat cards */}
           <div className="mt-12 flex gap-4">
             {[
-        
+              { label: "AVG BUILD", value: "12s" },
+              { label: "TEMPLATES", value: "60+" },
+              { label: "USERS", value: "10k+" },
             ].map((s) => (
               <div
                 key={s.label}
