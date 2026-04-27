@@ -1,0 +1,464 @@
+import { useEffect, useState } from "react";
+import {
+  ArrowLeft,
+  Code2,
+  Eye,
+  Loader2,
+  Download,
+  Copy,
+  Send,
+  Smartphone,
+  Monitor,
+  Tablet,
+  Rocket,
+} from "lucide-react";
+import { Link, useLocation } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
+import { useAuth } from "@/hooks/useAuth";
+import { collection, addDoc } from "firebase/firestore";
+import { db } from "@/integrations/firebase/config";
+
+type Device = "desktop" | "tablet" | "mobile";
+
+// ── Codestral — routed through Netlify Function proxy ────────────
+// The proxy at /api/codestral/* injects the API key server-side.
+// VITE_CODESTRAL_API_KEY is only used as a local dev fallback.
+const CODESTRAL_API_KEY = import.meta.env.VITE_CODESTRAL_API_KEY as string | undefined;
+const CODESTRAL_CHAT_URL = "/api/codestral/v1/chat/completions";
+
+if (!CODESTRAL_API_KEY) {
+  console.warn(
+    "[Matrix AI] VITE_CODESTRAL_API_KEY is not set in .env — local dev requests to /api/codestral will fail. " +
+    "Add VITE_CODESTRAL_API_KEY=your_key to your .env file and restart the dev server."
+  );
+}
+
+const BASE_SYSTEM = `You are MATRIX-AI, an expert web developer powered by Codestral.
+
+STRICT OUTPUT RULES:
+- Output ONLY a single complete HTML file
+- Always start with <!DOCTYPE html>
+- Never include markdown fences, explanations, or comments outside the HTML
+- Embed all CSS inside a <style> tag or inline styles
+- Use Tailwind CSS via CDN: <script src="https://cdn.tailwindcss.com"></script>
+- Use modern UI patterns: glassmorphism, gradients, smooth animations, clean typography
+- Fully responsive — mobile-first
+- Use semantic HTML5 elements
+- Include hover states and micro-interactions where appropriate
+- Prefer a dark or vibrant color scheme unless the prompt specifies otherwise`;
+
+function cleanHTML(html: string) {
+  return html
+    .replace(/^```html/i, "")
+    .replace(/^```/, "")
+    .replace(/```$/, "")
+    .trim();
+}
+
+function ensureHTML(html: string) {
+  if (!html.toLowerCase().includes("<!doctype")) {
+    return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-black text-white">
+${html}
+</body>
+</html>`;
+  }
+  return html;
+}
+
+function fallbackHTML(prompt: string) {
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<script src="https://cdn.tailwindcss.com"></script>
+<title>Matrix Build</title>
+</head>
+<body class="bg-black text-white flex items-center justify-center h-screen">
+  <div class="text-center">
+    <h1 class="text-3xl font-bold mb-4">⚡ MATRIX AI</h1>
+    <p class="text-gray-400">${prompt}</p>
+    <p class="mt-4 text-sm text-red-400">AI generation fallback activated</p>
+  </div>
+</body>
+</html>`;
+}
+
+export default function Build() {
+  const { user } = useAuth();
+  const location = useLocation();
+
+  const [html, setHtml] = useState("");
+  const [draft, setDraft] = useState(
+    (location.state as any)?.prompt ?? ""
+  );
+  const [loading, setLoading] = useState(false);
+  const [device, setDevice] = useState<Device>("mobile");
+  const [tab, setTab] = useState<"preview" | "code">("preview");
+  const [scale, setScale] = useState(1);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
+  useEffect(() => {
+    const resize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
+
+  // Auto-run if prompt came from navigation state
+  useEffect(() => {
+    const p = (location.state as any)?.prompt;
+    if (p) run(p);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── AI generation via Codestral ────────────────────────────────
+  const run = async (prompt: string) => {
+    if (!prompt.trim()) return;
+    setLoading(true);
+    setHtml("");
+
+    try {
+      let generatedHtml = "";
+
+      // Build request headers.
+      // On Netlify/production: proxy at /api/codestral/* injects the key server-side.
+      // On local dev: VITE_CODESTRAL_API_KEY is used directly (set in .env).
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      };
+      if (CODESTRAL_API_KEY) {
+        headers["Authorization"] = `Bearer ${CODESTRAL_API_KEY}`;
+      }
+
+      let r: Response;
+      try {
+        r = await fetch(CODESTRAL_CHAT_URL, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            model: "codestral-latest",
+            messages: [
+              { role: "system", content: BASE_SYSTEM },
+              {
+                role: "user",
+                content: `Build the following as a complete, beautiful, fully working HTML page. Output ONLY the HTML, nothing else:\n\n${prompt}`,
+              },
+            ],
+            temperature: 0.15,
+            max_tokens: 16384,
+          }),
+        });
+      } catch (networkErr: any) {
+        console.error("Network error calling Codestral:", networkErr);
+        toast.error("Network error — check console for details");
+        setHtml(fallbackHTML(prompt));
+        return;
+      }
+
+      if (r.ok) {
+        const data = await r.json();
+        generatedHtml = data?.choices?.[0]?.message?.content ?? "";
+        if (!generatedHtml) {
+          console.warn("Codestral returned empty content:", data);
+          toast.error("AI returned empty response");
+        }
+      } else {
+        let errBody = "";
+        try { errBody = await r.text(); } catch { /* ignore */ }
+        console.error(`Codestral ${r.status}:`, errBody);
+        const msg =
+          r.status === 401 ? "Invalid API key (401)" :
+          r.status === 429 ? "Rate limit hit — try again in a moment (429)" :
+          r.status === 422 ? "Bad request to AI (422)" :
+          `AI error ${r.status}`;
+        toast.error(msg);
+        generatedHtml = fallbackHTML(prompt);
+      }
+
+      generatedHtml = cleanHTML(generatedHtml);
+      if (!generatedHtml || generatedHtml.length < 80) {
+        generatedHtml = fallbackHTML(prompt);
+      }
+      generatedHtml = ensureHTML(generatedHtml);
+
+      setHtml(generatedHtml);
+      toast.success("Build Ready 🚀");
+
+      // Auto-save to Firestore if signed in
+      if (user) {
+        try {
+          await addDoc(collection(db, "generations"), {
+            user_id: user.uid,
+            prompt,
+            html: generatedHtml,
+            title: prompt.slice(0, 60),
+            created_at: new Date().toISOString(),
+          });
+        } catch {
+          // Silent — don't block the user if Firestore save fails
+        }
+      }
+    } catch (e: any) {
+      console.error("run() error:", e);
+      toast.error(e?.message ?? "Generation failed");
+      setHtml(fallbackHTML(prompt));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── Download ───────────────────────────────────────────────────
+  const download = () => {
+    const blob = new Blob([html], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "matrix.html";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ── Copy ───────────────────────────────────────────────────────
+  const copy = async () => {
+    await navigator.clipboard.writeText(html);
+    toast.success("Copied to clipboard");
+  };
+
+  // ── Device frame size ──────────────────────────────────────────
+  const getSize = () => {
+    if (device === "mobile") return "w-[360px] h-[740px]";
+    if (device === "tablet") return "w-[768px] h-[1000px]";
+    return "w-full h-full";
+  };
+
+  return (
+    <div className="h-screen flex flex-col bg-black text-white">
+      {/* ── Top bar ── */}
+      <header className="flex items-center justify-between px-3 py-2 border-b border-white/10 shrink-0">
+        <div className="flex items-center gap-2">
+          <Link to="/" aria-label="Back to home">
+            <ArrowLeft className="w-5 h-5" />
+          </Link>
+          {!isMobile && (
+            <span className="font-semibold text-sm tracking-wide">
+              Matrix AI
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1">
+          {html && (
+            <>
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={copy}
+                title="Copy HTML"
+                className="text-white/70 hover:text-white"
+              >
+                <Copy className="w-4 h-4" />
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={download}
+                title="Download HTML"
+                className="text-white/70 hover:text-white"
+              >
+                <Download className="w-4 h-4" />
+              </Button>
+            </>
+          )}
+          {!isMobile && html && (
+            <Button
+              size="sm"
+              className="bg-blue-600 hover:bg-blue-500 text-white ml-1"
+              onClick={() => {
+                const w = window.open("", "_blank");
+                if (w) {
+                  w.document.write(html);
+                  w.document.close();
+                }
+              }}
+            >
+              <Rocket className="w-3.5 h-3.5 mr-1" /> Preview
+            </Button>
+          )}
+        </div>
+      </header>
+
+      {/* ── Main ── */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Toolbar */}
+        <div className="flex justify-between items-center px-3 py-2 border-b border-white/10 shrink-0">
+          <div className="flex gap-1">
+            {(["preview", "code"] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  tab === t
+                    ? "bg-white/10 text-white"
+                    : "text-white/50 hover:text-white/80"
+                }`}
+              >
+                {t === "preview" ? (
+                  <Eye className="w-3.5 h-3.5" />
+                ) : (
+                  <Code2 className="w-3.5 h-3.5" />
+                )}
+                {t.charAt(0).toUpperCase() + t.slice(1)}
+              </button>
+            ))}
+          </div>
+
+          {tab === "preview" && (
+            <div className="flex gap-1">
+              {(
+                [
+                  { d: "desktop", Icon: Monitor },
+                  { d: "tablet", Icon: Tablet },
+                  { d: "mobile", Icon: Smartphone },
+                ] as const
+              ).map(({ d, Icon }) => (
+                <button
+                  key={d}
+                  onClick={() => setDevice(d)}
+                  className={`p-1.5 rounded-md transition-colors ${
+                    device === d
+                      ? "bg-white/10 text-white"
+                      : "text-white/40 hover:text-white/70"
+                  }`}
+                  aria-label={d}
+                >
+                  <Icon className="w-4 h-4" />
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Zoom slider */}
+        {tab === "preview" && (
+          <div className="px-3 py-1.5 flex items-center gap-2 text-xs text-white/50 border-b border-white/5 shrink-0">
+            <span>Zoom</span>
+            <input
+              type="range"
+              min="0.3"
+              max="1.2"
+              step="0.05"
+              value={scale}
+              onChange={(e) => setScale(Number(e.target.value))}
+              className="w-24 accent-blue-500"
+            />
+            <span className="font-mono">{Math.round(scale * 100)}%</span>
+          </div>
+        )}
+
+        {/* Content area */}
+        <div className="flex-1 flex items-center justify-center overflow-auto p-4">
+          {tab === "preview" ? (
+            <div
+              className={`bg-white overflow-hidden rounded-xl shadow-2xl shadow-black/50 ${getSize()}`}
+              style={{
+                transform: `scale(${scale})`,
+                transformOrigin: "top center",
+              }}
+            >
+              {html ? (
+                <iframe
+                  srcDoc={html}
+                  className="w-full h-full border-0"
+                  sandbox="allow-scripts"
+                  title="Preview"
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-3">
+                  {loading ? (
+                    <>
+                      <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+                      <p className="text-sm font-mono">Building...</p>
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center">
+                        <Monitor className="w-6 h-6 text-gray-400" />
+                      </div>
+                      <p className="text-sm">
+                        Describe what to build below
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <pre className="p-4 text-xs font-mono text-green-400 overflow-auto w-full h-full whitespace-pre-wrap">
+              {html || (
+                <span className="text-white/30">
+                  // Code will appear here after generation
+                </span>
+              )}
+            </pre>
+          )}
+        </div>
+      </div>
+
+      {/* ── Floating prompt input ── */}
+      <div className="shrink-0 px-4 pb-4 pt-2">
+        <div className="flex items-center gap-2 bg-white/10 backdrop-blur-lg rounded-2xl px-4 py-3 border border-white/10 focus-within:border-blue-500/50 transition-colors max-w-2xl mx-auto">
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                run(draft);
+              }
+            }}
+            placeholder="Describe what to build..."
+            className="flex-1 bg-transparent outline-none text-sm placeholder:text-white/30"
+            disabled={loading}
+          />
+          <Button
+            onClick={() => run(draft)}
+            disabled={loading || !draft.trim()}
+            size="icon"
+            className="bg-blue-600 hover:bg-blue-500 text-white rounded-xl shrink-0 disabled:opacity-40"
+          >
+            {loading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Send className="w-4 h-4" />
+            )}
+          </Button>
+        </div>
+      </div>
+
+      {/* Mobile preview FAB */}
+      {isMobile && html && (
+        <button
+          onClick={() => {
+            const w = window.open("", "_blank");
+            if (w) {
+              w.document.write(html);
+              w.document.close();
+            }
+          }}
+          className="fixed bottom-24 right-4 bg-blue-600 hover:bg-blue-500 p-4 rounded-full shadow-xl transition-colors"
+          aria-label="Open preview"
+        >
+          <Rocket className="w-5 h-5" />
+        </button>
+      )}
+    </div>
+  );
+}
+
