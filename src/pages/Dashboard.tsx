@@ -16,6 +16,7 @@ import { Navbar } from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
+import { CODESTRAL_CHAT_URL, explainCodestralError, getCodestralHeaders } from "@/lib/codestral";
 import {
   Loader2, Plus, Trash2, Eye, Code2, Edit3, Download,
   Copy, Zap, LayoutDashboard, Search, X, Check,
@@ -235,17 +236,9 @@ export default function Dashboard() {
     if (!active) return;
     setRegenLoading(true);
     try {
-      const key = import.meta.env.VITE_CODESTRAL_API_KEY;
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      };
-      if (key) {
-        headers["Authorization"] = "Bearer " + key;
-      }
-      const r = await fetch("/api/codestral/v1/chat/completions", {
+      const r = await fetch(CODESTRAL_CHAT_URL, {
         method: "POST",
-        headers,
+        headers: getCodestralHeaders(),
         body: JSON.stringify({
           model: "codestral-latest",
           messages: [
@@ -261,7 +254,7 @@ export default function Dashboard() {
             },
           ],
           temperature: 0.2,
-          max_tokens: 16384,
+          max_tokens: 2048,
         }),
       });
       if (r.ok) {
@@ -279,7 +272,7 @@ export default function Dashboard() {
           toast.success("Regenerated!");
         }
       } else {
-        toast.error("Regen failed: " + r.status);
+        toast.error(explainCodestralError(r.status));
       }
     } catch (e: any) {
       toast.error(e.message ?? "Regen failed");
