@@ -1,0 +1,3 @@
+# Netlify SPA fallback — ensures React Router works on manual deploys
+/*    /index.html   200
+
