@@ -110,13 +110,7 @@ export default function Build() {
     prompt: string,
     attempt = 1,
   ): Promise<Response> => {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    };
-    if (CODESTRAL_API_KEY) {
-      headers["Authorization"] = `Bearer ${CODESTRAL_API_KEY}`;
-    }
+    const headers = getCodestralHeaders();
 
     // 90s client-side timeout — Mistral upstream can be slow
     const controller = new AbortController();
@@ -139,7 +133,7 @@ export default function Build() {
           temperature: 0.15,
           // Smaller token budget = much lower chance of upstream 504 timeout.
           // A complete one-page HTML rarely exceeds ~3-4k tokens anyway.
-          max_tokens: 4096,
+          max_tokens: 2048,
         }),
       });
 
@@ -189,14 +183,7 @@ export default function Build() {
         let errBody = "";
         try { errBody = await r.text(); } catch { /* ignore */ }
         console.error(`Codestral ${r.status}:`, errBody);
-        const msg =
-          r.status === 401 ? "Invalid Codestral API key (401) — check your .env" :
-          r.status === 429 ? "Rate limit hit — wait a moment and retry (429)" :
-          r.status === 422 ? "Bad request to AI (422)" :
-          r.status === 504 ? "AI server timeout — try a shorter / simpler prompt (504)" :
-          r.status === 502 || r.status === 503 ? `AI service unavailable (${r.status}) — try again` :
-          `AI error ${r.status}`;
-        toast.error(msg);
+        toast.error(explainCodestralError(r.status));
         generatedHtml = fallbackHTML(prompt);
       }
 
