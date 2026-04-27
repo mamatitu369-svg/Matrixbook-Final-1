@@ -95,6 +95,10 @@ export default function Build() {
   const [tab, setTab] = useState<"preview" | "code">("preview");
   const [scale, setScale] = useState(1);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [history, setHistory] = useState<ChatTurn[]>([]);
+  const [docId, setDocId] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const didAutoRun = useRef(false);
 
   useEffect(() => {
     const resize = () => setIsMobile(window.innerWidth < 768);
@@ -102,10 +106,13 @@ export default function Build() {
     return () => window.removeEventListener("resize", resize);
   }, []);
 
-  // Auto-run if prompt came from navigation state
+  // Auto-run if prompt came from navigation state — guard against StrictMode double-mount
   useEffect(() => {
     const p = (location.state as any)?.prompt;
-    if (p) run(p);
+    if (p && !didAutoRun.current) {
+      didAutoRun.current = true;
+      run(p);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
