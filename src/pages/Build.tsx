@@ -118,6 +118,55 @@ export default function Build() {
   }, []);
 
   // ── AI generation via Codestral ────────────────────────────────
+  const callCodestral = async (
+    prompt: string,
+    attempt = 1,
+  ): Promise<Response> => {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    };
+    if (CODESTRAL_API_KEY) {
+      headers["Authorization"] = `Bearer ${CODESTRAL_API_KEY}`;
+    }
+
+    // 90s client-side timeout — Mistral upstream can be slow
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 90_000);
+
+    try {
+      const r = await fetch(CODESTRAL_CHAT_URL, {
+        method: "POST",
+        headers,
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: "codestral-latest",
+          messages: [
+            { role: "system", content: BASE_SYSTEM },
+            {
+              role: "user",
+              content: `Build the following as a complete, beautiful, fully working HTML page. Output ONLY the HTML, nothing else:\n\n${prompt}`,
+            },
+          ],
+          temperature: 0.15,
+          // Smaller token budget = much lower chance of upstream 504 timeout.
+          // A complete one-page HTML rarely exceeds ~3-4k tokens anyway.
+          max_tokens: 4096,
+        }),
+      });
+
+      // Auto-retry once on transient gateway errors
+      if ((r.status === 502 || r.status === 503 || r.status === 504) && attempt < 2) {
+        console.warn(`Codestral ${r.status} — retrying (attempt ${attempt + 1})`);
+        await new Promise((res) => setTimeout(res, 1500));
+        return callCodestral(prompt, attempt + 1);
+      }
+      return r;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   const run = async (prompt: string) => {
     if (!prompt.trim()) return;
     setLoading(true);
@@ -126,38 +175,17 @@ export default function Build() {
     try {
       let generatedHtml = "";
 
-      // Build request headers.
-      // On Netlify/production: proxy at /api/codestral/* injects the key server-side.
-      // On local dev: VITE_CODESTRAL_API_KEY is used directly (set in .env).
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      };
-      if (CODESTRAL_API_KEY) {
-        headers["Authorization"] = `Bearer ${CODESTRAL_API_KEY}`;
-      }
-
       let r: Response;
       try {
-        r = await fetch(CODESTRAL_CHAT_URL, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            model: "codestral-latest",
-            messages: [
-              { role: "system", content: BASE_SYSTEM },
-              {
-                role: "user",
-                content: `Build the following as a complete, beautiful, fully working HTML page. Output ONLY the HTML, nothing else:\n\n${prompt}`,
-              },
-            ],
-            temperature: 0.15,
-            max_tokens: 16384,
-          }),
-        });
+        r = await callCodestral(prompt);
       } catch (networkErr: any) {
+        const aborted = networkErr?.name === "AbortError";
         console.error("Network error calling Codestral:", networkErr);
-        toast.error("Network error — check console for details");
+        toast.error(
+          aborted
+            ? "AI request timed out — try a shorter prompt"
+            : "Network error — check your connection",
+        );
         setHtml(fallbackHTML(prompt));
         return;
       }
@@ -174,9 +202,11 @@ export default function Build() {
         try { errBody = await r.text(); } catch { /* ignore */ }
         console.error(`Codestral ${r.status}:`, errBody);
         const msg =
-          r.status === 401 ? "Invalid API key (401)" :
-          r.status === 429 ? "Rate limit hit — try again in a moment (429)" :
+          r.status === 401 ? "Invalid Codestral API key (401) — check your .env" :
+          r.status === 429 ? "Rate limit hit — wait a moment and retry (429)" :
           r.status === 422 ? "Bad request to AI (422)" :
+          r.status === 504 ? "AI server timeout — try a shorter / simpler prompt (504)" :
+          r.status === 502 || r.status === 503 ? `AI service unavailable (${r.status}) — try again` :
           `AI error ${r.status}`;
         toast.error(msg);
         generatedHtml = fallbackHTML(prompt);
