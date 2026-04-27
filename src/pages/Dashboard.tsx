@@ -309,7 +309,7 @@ export default function Dashboard() {
             <div className="flex items-center gap-2 mb-1">
               <LayoutDashboard className="w-5 h-5 text-primary" />
               <p className="font-mono text-xs text-primary tracking-widest uppercase">
-                // Dashboard
+                
               </p>
             </div>
             <h1 className="font-display text-3xl md:text-4xl font-bold">
