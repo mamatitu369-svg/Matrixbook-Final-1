@@ -18,21 +18,9 @@ import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
 import { collection, addDoc } from "firebase/firestore";
 import { db } from "@/integrations/firebase/config";
+import { CODESTRAL_CHAT_URL, explainCodestralError, getCodestralHeaders } from "@/lib/codestral";
 
 type Device = "desktop" | "tablet" | "mobile";
-
-// ── Codestral — routed through Netlify Function proxy ────────────
-// The proxy at /api/codestral/* injects the API key server-side.
-// VITE_CODESTRAL_API_KEY is only used as a local dev fallback.
-const CODESTRAL_API_KEY = import.meta.env.VITE_CODESTRAL_API_KEY as string | undefined;
-const CODESTRAL_CHAT_URL = "/api/codestral/v1/chat/completions";
-
-if (!CODESTRAL_API_KEY) {
-  console.warn(
-    "[Matrix AI] VITE_CODESTRAL_API_KEY is not set in .env — local dev requests to /api/codestral will fail. " +
-    "Add VITE_CODESTRAL_API_KEY=your_key to your .env file and restart the dev server."
-  );
-}
 
 const BASE_SYSTEM = `You are MATRIX-AI, an expert web developer powered by Codestral.
 
@@ -122,13 +110,7 @@ export default function Build() {
     prompt: string,
     attempt = 1,
   ): Promise<Response> => {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    };
-    if (CODESTRAL_API_KEY) {
-      headers["Authorization"] = `Bearer ${CODESTRAL_API_KEY}`;
-    }
+    const headers = getCodestralHeaders();
 
     // 90s client-side timeout — Mistral upstream can be slow
     const controller = new AbortController();
@@ -151,7 +133,7 @@ export default function Build() {
           temperature: 0.15,
           // Smaller token budget = much lower chance of upstream 504 timeout.
           // A complete one-page HTML rarely exceeds ~3-4k tokens anyway.
-          max_tokens: 4096,
+          max_tokens: 2048,
         }),
       });
 
@@ -201,14 +183,7 @@ export default function Build() {
         let errBody = "";
         try { errBody = await r.text(); } catch { /* ignore */ }
         console.error(`Codestral ${r.status}:`, errBody);
-        const msg =
-          r.status === 401 ? "Invalid Codestral API key (401) — check your .env" :
-          r.status === 429 ? "Rate limit hit — wait a moment and retry (429)" :
-          r.status === 422 ? "Bad request to AI (422)" :
-          r.status === 504 ? "AI server timeout — try a shorter / simpler prompt (504)" :
-          r.status === 502 || r.status === 503 ? `AI service unavailable (${r.status}) — try again` :
-          `AI error ${r.status}`;
-        toast.error(msg);
+        toast.error(explainCodestralError(r.status));
         generatedHtml = fallbackHTML(prompt);
       }
 

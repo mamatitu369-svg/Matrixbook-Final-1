@@ -23,6 +23,7 @@ import {
 import { auth, googleProvider } from "@/integrations/firebase/config";
 import { useAuth } from "@/hooks/useAuth";
 import { Brand } from "@/components/Brand";
+import { firebaseMissingEnvKeys } from "@/lib/env";
 
 export default function AuthPage() {
   const [params] = useSearchParams();
@@ -51,6 +52,10 @@ export default function AuthPage() {
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (firebaseMissingEnvKeys.length > 0) {
+      toast.error(`Missing Firebase .env values: ${firebaseMissingEnvKeys.join(", ")}`);
+      return;
+    }
     setLoading(true);
     try {
       if (mode === "signup") {
@@ -79,6 +84,10 @@ export default function AuthPage() {
   };
 
   const onGoogle = async () => {
+    if (firebaseMissingEnvKeys.length > 0) {
+      toast.error(`Missing Firebase .env values: ${firebaseMissingEnvKeys.join(", ")}`);
+      return;
+    }
     setLoading(true);
     try {
       await signInWithPopup(auth, googleProvider);
