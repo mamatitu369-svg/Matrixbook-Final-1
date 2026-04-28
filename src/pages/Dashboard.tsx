@@ -103,6 +103,11 @@ function cleanHTML(html: string) {
   return html.replace(/^```html\s*/i, "").replace(/^```\s*/, "").replace(/\s*```$/, "").trim();
 }
 
+function ensureHTML(html: string) {
+  if (html.toLowerCase().includes("<!doctype")) return html;
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script></head><body>${html}</body></html>`;
+}
+
 function svgDataUrl(svg: string) {
   return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
 }
@@ -127,6 +132,9 @@ export default function Dashboard() {
   const [imgResults,     setImgResults]     = useState<string[]>([]);
   const [selectedImgSrc, setSelectedImgSrc] = useState<string | null>(null);
   const [regenLoading,   setRegenLoading]   = useState(false);
+  const [localImages,     setLocalImages]    = useState<string[]>([]);
+  const [imagePrompt,     setImagePrompt]    = useState("");
+  const [imageBusy,       setImageBusy]      = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   /* ── Realtime Firestore listener ── */
