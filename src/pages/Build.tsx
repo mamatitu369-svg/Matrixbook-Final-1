@@ -277,6 +277,42 @@ export default function Build() {
     toast.success("Copied to clipboard");
   };
 
+  const uploadImages = async (files: FileList | null) => {
+    if (!files?.length) return;
+    try {
+      const images = await Promise.all(Array.from(files).filter((file) => file.type.startsWith("image/")).map((file) => fileToImageDataUrl(file)));
+      setGallery((prev) => [...images, ...prev].slice(0, 12));
+      toast.success(`${images.length} image${images.length === 1 ? "" : "s"} added`);
+    } catch (error: any) {
+      toast.error(error?.message ?? "Image upload failed");
+    }
+  };
+
+  const generateImageAsset = async () => {
+    if (!imagePrompt.trim()) return;
+    setImageBusy(true);
+    try {
+      const result = await completeWebsiteAI([
+        { role: "system", content: "Return only one complete SVG image. No markdown. No explanation. Use rich gradients, shapes, and polished poster-like composition." },
+        { role: "user", content: imagePrompt },
+      ], { prefer: "sambanova", timeoutMs: 60_000 });
+      const svg = result.content.replace(/^```svg/i, "").replace(/^```/, "").replace(/```$/, "").trim();
+      if (!svg.toLowerCase().includes("<svg")) throw new Error("AI did not return an SVG image");
+      setGallery((prev) => [svgDataUrl(svg), ...prev].slice(0, 12));
+      setImagePrompt("");
+      toast.success("Image generated");
+    } catch (error: any) {
+      toast.error(error?.message ?? "Image generation failed");
+    } finally {
+      setImageBusy(false);
+    }
+  };
+
+  const applyGalleryToPrompt = (src: string) => {
+    setDraft((prev) => `${prev.trim()}\nUse this uploaded image in the website: ${src}`.trim());
+    setMediaOpen(false);
+  };
+
   // ── Device frame size ──────────────────────────────────────────
   const getSize = () => {
     if (device === "mobile") return "w-[360px] h-[740px]";
