@@ -71,7 +71,6 @@ function injectEditor(html: string): string {
     "document.querySelectorAll('h1,h2,h3,h4,h5,h6,p,span,a,li,button,label').forEach(function(el){",
     "  el.setAttribute('contenteditable','true');",
     "  el.setAttribute('data-me','1');",
-    "  el.addEventListener('input',function(){window.parent.postMessage({type:'matrix-html-change',html:'<!DOCTYPE html>'+document.documentElement.outerHTML},'*');});",
     "  el.addEventListener('blur',function(){window.parent.postMessage({type:'matrix-html-change',html:'<!DOCTYPE html>'+document.documentElement.outerHTML},'*');});",
     "});",
     "document.querySelectorAll('img').forEach(function(img){",
@@ -107,6 +106,24 @@ function cleanHTML(html: string) {
 function ensureHTML(html: string) {
   if (html.toLowerCase().includes("<!doctype")) return html;
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script></head><body>${html}</body></html>`;
+}
+
+function sanitizeEditorHTML(html: string) {
+  try {
+    const doc = new DOMParser().parseFromString(ensureHTML(html), "text/html");
+    doc.querySelectorAll("script").forEach((script) => {
+      if (script.textContent?.includes("matrix-html-change") || script.textContent?.includes("matrix-img-click")) {
+        script.remove();
+      }
+    });
+    doc.querySelectorAll("[data-me]").forEach((el) => {
+      el.removeAttribute("data-me");
+      el.removeAttribute("contenteditable");
+    });
+    return `<!DOCTYPE html>${doc.documentElement.outerHTML}`;
+  } catch {
+    return ensureHTML(html);
+  }
 }
 
 function realisticImageUrl(prompt: string) {
@@ -197,7 +214,7 @@ export default function Dashboard() {
         setSelectedImgSrc(e.data.src as string);
         setImgPanel(true);
       } else if (e.data?.type === "matrix-html-change" && typeof e.data.html === "string") {
-        setEditedHtml(e.data.html);
+        setEditedHtml(sanitizeEditorHTML(e.data.html));
       }
     };
     window.addEventListener("message", handler);
@@ -228,10 +245,11 @@ export default function Dashboard() {
   const saveEdits = async () => {
     if (!active) return;
     const iframe = iframeRef.current;
-    const liveHtml =
+    const liveHtml = sanitizeEditorHTML(
       iframe?.contentDocument?.documentElement?.outerHTML
         ? "<!DOCTYPE html>" + iframe.contentDocument.documentElement.outerHTML
-        : editedHtml;
+        : editedHtml,
+    );
     try {
       await updateDoc(doc(db, "generations", active.id), { html: liveHtml });
       setActive((prev) => (prev ? { ...prev, html: liveHtml } : null));
