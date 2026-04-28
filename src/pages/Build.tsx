@@ -13,14 +13,22 @@ import {
   Rocket,
   MessageSquare,
   Sparkles,
+  Image as ImageIcon,
+  Upload,
+  Wand2,
+  Settings,
 } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
 import { collection, addDoc, doc, updateDoc } from "firebase/firestore";
 import { db } from "@/integrations/firebase/config";
-import { CODESTRAL_CHAT_URL, explainCodestralError, getCodestralHeaders } from "@/lib/codestral";
+import { completeWebsiteAI } from "@/lib/websiteAI";
+import { getStoredSambaNovaKey, saveStoredSambaNovaKey } from "@/lib/sambanova";
 
 type ChatTurn = { role: "user" | "assistant"; content: string };
 
@@ -38,7 +46,9 @@ STRICT OUTPUT RULES:
 - Fully responsive — mobile-first
 - Use semantic HTML5 elements
 - Include hover states and micro-interactions where appropriate
-- Prefer a dark or vibrant color scheme unless the prompt specifies otherwise`;
+- Prefer a dark or vibrant color scheme unless the prompt specifies otherwise
+- When the user asks for full-stack behavior, build a complete single-file app prototype with frontend, JavaScript state, forms, CRUD interactions, localStorage persistence, dashboards, auth screens, and API simulation where real backend access is not available
+- If user-provided image data URLs are supplied, use them directly in the generated page where relevant`;
 
 function cleanHTML(html: string) {
   return html
@@ -82,6 +92,23 @@ function fallbackHTML(prompt: string) {
 </html>`;
 }
 
+async function fileToImageDataUrl(file: File, maxSize = 1200, quality = 0.82) {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxSize / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Image processing unavailable");
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
+function svgDataUrl(svg: string) {
+  return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
+}
+
 export default function Build() {
   const { user } = useAuth();
   const location = useLocation();
@@ -98,7 +125,23 @@ export default function Build() {
   const [history, setHistory] = useState<ChatTurn[]>([]);
   const [docId, setDocId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [mediaOpen, setMediaOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [gallery, setGallery] = useState<string[]>([]);
+  const [imagePrompt, setImagePrompt] = useState("");
+  const [imageBusy, setImageBusy] = useState(false);
+  const [queuedCount, setQueuedCount] = useState(0);
+  const [sambaKeyDraft, setSambaKeyDraft] = useState(() => getStoredSambaNovaKey());
   const didAutoRun = useRef(false);
+  const htmlRef = useRef(html);
+  const historyRef = useRef(history);
+  const docIdRef = useRef(docId);
+  const loadingRef = useRef(false);
+  const queueRef = useRef<string[]>([]);
+
+  useEffect(() => { htmlRef.current = html; }, [html]);
+  useEffect(() => { historyRef.current = history; }, [history]);
+  useEffect(() => { docIdRef.current = docId; }, [docId]);
 
   useEffect(() => {
     const resize = () => setIsMobile(window.innerWidth < 768);
