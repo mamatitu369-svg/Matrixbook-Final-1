@@ -13,14 +13,22 @@ import {
   Rocket,
   MessageSquare,
   Sparkles,
+  Image as ImageIcon,
+  Upload,
+  Wand2,
+  Settings,
 } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
 import { collection, addDoc, doc, updateDoc } from "firebase/firestore";
 import { db } from "@/integrations/firebase/config";
-import { CODESTRAL_CHAT_URL, explainCodestralError, getCodestralHeaders } from "@/lib/codestral";
+import { completeWebsiteAI } from "@/lib/websiteAI";
+import { getStoredSambaNovaKey, saveStoredSambaNovaKey } from "@/lib/sambanova";
 
 type ChatTurn = { role: "user" | "assistant"; content: string };
 
@@ -38,7 +46,9 @@ STRICT OUTPUT RULES:
 - Fully responsive — mobile-first
 - Use semantic HTML5 elements
 - Include hover states and micro-interactions where appropriate
-- Prefer a dark or vibrant color scheme unless the prompt specifies otherwise`;
+- Prefer a dark or vibrant color scheme unless the prompt specifies otherwise
+- When the user asks for full-stack behavior, build a complete single-file app prototype with frontend, JavaScript state, forms, CRUD interactions, localStorage persistence, dashboards, auth screens, and API simulation where real backend access is not available
+- If user-provided image data URLs are supplied, use them directly in the generated page where relevant`;
 
 function cleanHTML(html: string) {
   return html
@@ -82,6 +92,23 @@ function fallbackHTML(prompt: string) {
 </html>`;
 }
 
+async function fileToImageDataUrl(file: File, maxSize = 1200, quality = 0.82) {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxSize / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Image processing unavailable");
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
+function svgDataUrl(svg: string) {
+  return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
+}
+
 export default function Build() {
   const { user } = useAuth();
   const location = useLocation();
@@ -98,7 +125,23 @@ export default function Build() {
   const [history, setHistory] = useState<ChatTurn[]>([]);
   const [docId, setDocId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [mediaOpen, setMediaOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [gallery, setGallery] = useState<string[]>([]);
+  const [imagePrompt, setImagePrompt] = useState("");
+  const [imageBusy, setImageBusy] = useState(false);
+  const [queuedCount, setQueuedCount] = useState(0);
+  const [sambaKeyDraft, setSambaKeyDraft] = useState(() => getStoredSambaNovaKey());
   const didAutoRun = useRef(false);
+  const htmlRef = useRef(html);
+  const historyRef = useRef(history);
+  const docIdRef = useRef(docId);
+  const loadingRef = useRef(false);
+  const queueRef = useRef<string[]>([]);
+
+  useEffect(() => { htmlRef.current = html; }, [html]);
+  useEffect(() => { historyRef.current = history; }, [history]);
+  useEffect(() => { docIdRef.current = docId; }, [docId]);
 
   useEffect(() => {
     const resize = () => setIsMobile(window.innerWidth < 768);
@@ -116,148 +159,105 @@ export default function Build() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── AI generation via Codestral ────────────────────────────────
-  const callCodestral = async (
-    messages: { role: string; content: string }[],
-    attempt = 1,
-  ): Promise<Response> => {
-    const headers = getCodestralHeaders();
+  const persistBuild = async (prompt: string, generatedHtml: string) => {
+    if (!user) return;
+    try {
+      if (!docIdRef.current) {
+        const created = await addDoc(collection(db, "generations"), {
+          user_id: user.uid,
+          prompt,
+          html: generatedHtml,
+          title: prompt.slice(0, 60),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+        docIdRef.current = created.id;
+        setDocId(created.id);
+      } else {
+        await updateDoc(doc(db, "generations", docIdRef.current), {
+          html: generatedHtml,
+          updated_at: new Date().toISOString(),
+        });
+      }
+    } catch (saveErr) {
+      console.warn("Firestore save failed:", saveErr);
+      toast.error("Saved preview locally, but cloud save failed");
+    }
+  };
 
-    // 90s client-side timeout — Mistral upstream can be slow
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 90_000);
+  const processPrompt = async (prompt: string) => {
+    const currentHtml = htmlRef.current;
+    const isFollowUp = currentHtml.length > 0;
+    const userTurn: ChatTurn = { role: "user", content: prompt };
+    const nextHistory = [...historyRef.current, userTurn];
+    historyRef.current = nextHistory;
+    setHistory(nextHistory);
 
     try {
-      const r = await fetch(CODESTRAL_CHAT_URL, {
-        method: "POST",
-        headers,
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: "codestral-latest",
-          messages,
-          temperature: 0.15,
-          max_tokens: 2048,
-        }),
-      });
-
-      if ((r.status === 502 || r.status === 503 || r.status === 504) && attempt < 2) {
-        console.warn(`Codestral ${r.status} — retrying (attempt ${attempt + 1})`);
-        await new Promise((res) => setTimeout(res, 1500));
-        return callCodestral(messages, attempt + 1);
+      const imageContext = gallery.length
+        ? `\n\nUser gallery images available as data URLs. Use these when relevant:\n${gallery.slice(0, 4).join("\n")}`
+        : "";
+      const messages = [
+        { role: "system", content: BASE_SYSTEM },
+        {
+          role: "user",
+          content: isFollowUp
+            ? `Current HTML:\n\n${currentHtml}\n\nApply this next change and output the FULL updated HTML only:\n\n${prompt}${imageContext}`
+            : `Build this as a complete, polished, fully interactive single-file web app/page. Output ONLY the HTML:\n\n${prompt}${imageContext}`,
+        },
+      ];
+      const result = await completeWebsiteAI(messages, { prefer: "sambanova", timeoutMs: 90_000 });
+      let generatedHtml = ensureHTML(cleanHTML(result.content));
+      if (!generatedHtml || generatedHtml.length < 80) generatedHtml = isFollowUp ? currentHtml : fallbackHTML(prompt);
+      htmlRef.current = generatedHtml;
+      setHtml(generatedHtml);
+      const doneHistory: ChatTurn[] = [
+        ...nextHistory,
+        { role: "assistant", content: `✓ Updated with ${result.provider}.` },
+      ];
+      historyRef.current = doneHistory;
+      setHistory(doneHistory);
+      await persistBuild(prompt, generatedHtml);
+      toast.success(isFollowUp ? "Updated" : "Build ready");
+    } catch (e: any) {
+      console.error("run() error:", e);
+      toast.error(e?.name === "AbortError" ? "AI request timed out" : e?.message ?? "Generation failed");
+      if (!currentHtml) {
+        const fallback = fallbackHTML(prompt);
+        htmlRef.current = fallback;
+        setHtml(fallback);
       }
-      return r;
+    }
+  };
+
+  const drainQueue = async (first: string) => {
+    loadingRef.current = true;
+    setLoading(true);
+    try {
+      await processPrompt(first);
+      while (queueRef.current.length > 0) {
+        const next = queueRef.current.shift();
+        setQueuedCount(queueRef.current.length);
+        if (next) await processPrompt(next);
+      }
     } finally {
-      clearTimeout(timer);
+      loadingRef.current = false;
+      setLoading(false);
+      setQueuedCount(0);
     }
   };
 
   const run = async (prompt: string) => {
-    if (!prompt.trim() || loading) return;
-    setLoading(true);
-    // Clear input immediately so user can keep typing
+    const next = prompt.trim();
+    if (!next) return;
     setDraft("");
-
-    const isFollowUp = html.length > 0;
-    const userTurn: ChatTurn = { role: "user", content: prompt };
-    const newHistory: ChatTurn[] = [...history, userTurn];
-    setHistory(newHistory);
-
-    try {
-      // Build the message list. For follow-ups, include previous HTML so the
-      // model can iterate on it instead of starting from scratch.
-      const messages: { role: string; content: string }[] = [
-        { role: "system", content: BASE_SYSTEM },
-      ];
-
-      if (isFollowUp) {
-        messages.push({
-          role: "user",
-          content: `Here is the current HTML page you previously generated:\n\n${html}\n\nNow apply this change and output the FULL updated HTML page only:\n\n${prompt}`,
-        });
-      } else {
-        messages.push({
-          role: "user",
-          content: `Build the following as a complete, beautiful, fully working HTML page. Output ONLY the HTML, nothing else:\n\n${prompt}`,
-        });
-      }
-
-      let generatedHtml = "";
-
-      let r: Response;
-      try {
-        r = await callCodestral(messages);
-      } catch (networkErr: any) {
-        const aborted = networkErr?.name === "AbortError";
-        console.error("Network error calling Codestral:", networkErr);
-        toast.error(
-          aborted
-            ? "AI request timed out — try a shorter prompt"
-            : "Network error — check your connection",
-        );
-        if (!isFollowUp) setHtml(fallbackHTML(prompt));
-        return;
-      }
-
-      if (r.ok) {
-        const data = await r.json();
-        generatedHtml = data?.choices?.[0]?.message?.content ?? "";
-        if (!generatedHtml) {
-          console.warn("Codestral returned empty content:", data);
-          toast.error("AI returned empty response");
-        }
-      } else {
-        let errBody = "";
-        try { errBody = await r.text(); } catch { /* ignore */ }
-        console.error(`Codestral ${r.status}:`, errBody);
-        toast.error(explainCodestralError(r.status));
-        if (!isFollowUp) generatedHtml = fallbackHTML(prompt);
-      }
-
-      generatedHtml = cleanHTML(generatedHtml);
-      if (!generatedHtml || generatedHtml.length < 80) {
-        if (isFollowUp) {
-          // Don't wipe a working page on a bad follow-up
-          return;
-        }
-        generatedHtml = fallbackHTML(prompt);
-      }
-      generatedHtml = ensureHTML(generatedHtml);
-
-      setHtml(generatedHtml);
-      setHistory([...newHistory, { role: "assistant", content: "✓ Updated the page." }]);
-      toast.success(isFollowUp ? "Updated 🎨" : "Build Ready 🚀");
-
-      // Persist to Firestore — create on first turn, update on follow-ups
-      if (user) {
-        try {
-          if (!docId) {
-            const created = await addDoc(collection(db, "generations"), {
-              user_id: user.uid,
-              prompt,
-              html: generatedHtml,
-              title: prompt.slice(0, 60),
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            });
-            setDocId(created.id);
-          } else {
-            await updateDoc(doc(db, "generations", docId), {
-              html: generatedHtml,
-              updated_at: new Date().toISOString(),
-            });
-          }
-        } catch (saveErr) {
-          console.warn("Firestore save failed:", saveErr);
-        }
-      }
-    } catch (e: any) {
-      console.error("run() error:", e);
-      toast.error(e?.message ?? "Generation failed");
-      if (!html) setHtml(fallbackHTML(prompt));
-    } finally {
-      // Always release the input — this is the key fix for the "stuck" chat
-      setLoading(false);
+    if (loadingRef.current) {
+      queueRef.current.push(next);
+      setQueuedCount(queueRef.current.length);
+      toast.message("Prompt queued");
+      return;
     }
+    await drainQueue(next);
   };
 
   // ── Download ───────────────────────────────────────────────────
@@ -275,6 +275,42 @@ export default function Build() {
   const copy = async () => {
     await navigator.clipboard.writeText(html);
     toast.success("Copied to clipboard");
+  };
+
+  const uploadImages = async (files: FileList | null) => {
+    if (!files?.length) return;
+    try {
+      const images = await Promise.all(Array.from(files).filter((file) => file.type.startsWith("image/")).map((file) => fileToImageDataUrl(file)));
+      setGallery((prev) => [...images, ...prev].slice(0, 12));
+      toast.success(`${images.length} image${images.length === 1 ? "" : "s"} added`);
+    } catch (error: any) {
+      toast.error(error?.message ?? "Image upload failed");
+    }
+  };
+
+  const generateImageAsset = async () => {
+    if (!imagePrompt.trim()) return;
+    setImageBusy(true);
+    try {
+      const result = await completeWebsiteAI([
+        { role: "system", content: "Return only one complete SVG image. No markdown. No explanation. Use rich gradients, shapes, and polished poster-like composition." },
+        { role: "user", content: imagePrompt },
+      ], { prefer: "sambanova", timeoutMs: 60_000 });
+      const svg = result.content.replace(/^```svg/i, "").replace(/^```/, "").replace(/```$/, "").trim();
+      if (!svg.toLowerCase().includes("<svg")) throw new Error("AI did not return an SVG image");
+      setGallery((prev) => [svgDataUrl(svg), ...prev].slice(0, 12));
+      setImagePrompt("");
+      toast.success("Image generated");
+    } catch (error: any) {
+      toast.error(error?.message ?? "Image generation failed");
+    } finally {
+      setImageBusy(false);
+    }
+  };
+
+  const applyGalleryToPrompt = (src: string) => {
+    setDraft((prev) => `${prev.trim()}\nUse this uploaded image in the website: ${src}`.trim());
+    setMediaOpen(false);
   };
 
   // ── Device frame size ──────────────────────────────────────────
@@ -300,6 +336,24 @@ export default function Build() {
         </div>
 
         <div className="flex items-center gap-1">
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => setMediaOpen(true)}
+            title="Image tools"
+            className="text-white/70 hover:text-white"
+          >
+            <ImageIcon className="w-4 h-4" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => setSettingsOpen(true)}
+            title="AI settings"
+            className="text-white/70 hover:text-white"
+          >
+            <Settings className="w-4 h-4" />
+          </Button>
           {history.length > 0 && (
             <Button
               size="icon"
@@ -495,11 +549,15 @@ export default function Build() {
                 : "Describe what to build..."
             }
             className="flex-1 bg-transparent outline-none text-sm placeholder:text-white/30"
-            disabled={loading}
           />
+          {queuedCount > 0 && (
+            <span className="text-[10px] font-mono text-blue-300 px-2 py-1 rounded-md bg-blue-500/10 border border-blue-500/20">
+              {queuedCount} queued
+            </span>
+          )}
           <Button
             onClick={() => run(draft)}
-            disabled={loading || !draft.trim()}
+            disabled={!draft.trim()}
             size="icon"
             className="bg-blue-600 hover:bg-blue-500 text-white rounded-xl shrink-0 disabled:opacity-40"
           >
@@ -557,6 +615,48 @@ export default function Build() {
           </aside>
         </div>
       )}
+
+      <Dialog open={mediaOpen} onOpenChange={setMediaOpen}>
+        <DialogContent className="glass-strong max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><ImageIcon className="w-4 h-4 text-primary" /> Image studio</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <label className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border p-6 cursor-pointer hover:border-primary/60 transition-colors">
+              <Upload className="w-5 h-5 text-primary" />
+              <span className="text-sm text-white/80">Upload local gallery images</span>
+              <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => uploadImages(e.target.files)} />
+            </label>
+            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+              <Textarea value={imagePrompt} onChange={(e) => setImagePrompt(e.target.value)} placeholder="Prompt an image/SVG asset for this website..." className="min-h-20 bg-white/5 border-white/10 text-white" />
+              <Button onClick={generateImageAsset} disabled={imageBusy || !imagePrompt.trim()} className="self-end bg-blue-600 hover:bg-blue-500 text-white">
+                {imageBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />} Generate
+              </Button>
+            </div>
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-72 overflow-auto">
+              {gallery.map((src, i) => (
+                <button key={i} onClick={() => applyGalleryToPrompt(src)} className="aspect-square rounded-lg overflow-hidden border border-white/10 hover:border-blue-400 transition-colors">
+                  <img src={src} alt={`Gallery asset ${i + 1}`} className="w-full h-full object-cover" />
+                </button>
+              ))}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogContent className="glass-strong max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Settings className="w-4 h-4 text-primary" /> AI settings</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input value={sambaKeyDraft} onChange={(e) => setSambaKeyDraft(e.target.value)} placeholder="SambaNova API key" className="bg-white/5 border-white/10 text-white" />
+            <Button className="w-full bg-blue-600 hover:bg-blue-500 text-white" onClick={() => { saveStoredSambaNovaKey(sambaKeyDraft); setSettingsOpen(false); toast.success("SambaNova key saved for this browser"); }}>
+              Save AI key
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Mobile preview FAB */}
       {isMobile && html && (

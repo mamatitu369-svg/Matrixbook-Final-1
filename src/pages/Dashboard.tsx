@@ -14,13 +14,14 @@ import { useAuth } from "@/hooks/useAuth";
 import { Navbar } from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { CODESTRAL_CHAT_URL, explainCodestralError, getCodestralHeaders } from "@/lib/codestral";
+import { completeWebsiteAI } from "@/lib/websiteAI";
 import {
   Loader2, Plus, Trash2, Eye, Code2, Edit3, Download,
   Copy, Zap, LayoutDashboard, Search, X, Check,
   Smartphone, Monitor, Tablet, RefreshCw,
-  Image as ImageIcon, ShoppingBag, Type, Palette, MousePointer2,
+  Image as ImageIcon, ShoppingBag, Type, Palette, MousePointer2, Upload, Wand2,
 } from "lucide-react";
 import {
   Dialog,
@@ -69,9 +70,8 @@ function injectEditor(html: string): string {
     "document.querySelectorAll('h1,h2,h3,h4,h5,h6,p,span,a,li,button,label').forEach(function(el){",
     "  el.setAttribute('contenteditable','true');",
     "  el.setAttribute('data-me','1');",
-    "  el.addEventListener('blur',function(){",
-    "    window.parent.postMessage({type:'matrix-edit',text:el.innerText},'*');",
-    "  });",
+    "  el.addEventListener('input',function(){window.parent.postMessage({type:'matrix-html-change',html:'<!DOCTYPE html>'+document.documentElement.outerHTML},'*');});",
+    "  el.addEventListener('blur',function(){window.parent.postMessage({type:'matrix-html-change',html:'<!DOCTYPE html>'+document.documentElement.outerHTML},'*');});",
     "});",
     "document.querySelectorAll('img').forEach(function(img){",
     "  img.style.cursor='pointer';",
@@ -84,6 +84,32 @@ function injectEditor(html: string): string {
     "</" + "script>",
   ].join("");
   return html.replace("</body>", script + "</body>");
+}
+
+async function fileToImageDataUrl(file: File, maxSize = 1200, quality = 0.82) {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxSize / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Image processing unavailable");
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
+function cleanHTML(html: string) {
+  return html.replace(/^```html\s*/i, "").replace(/^```\s*/, "").replace(/\s*```$/, "").trim();
+}
+
+function ensureHTML(html: string) {
+  if (html.toLowerCase().includes("<!doctype")) return html;
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script></head><body>${html}</body></html>`;
+}
+
+function svgDataUrl(svg: string) {
+  return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -106,6 +132,9 @@ export default function Dashboard() {
   const [imgResults,     setImgResults]     = useState<string[]>([]);
   const [selectedImgSrc, setSelectedImgSrc] = useState<string | null>(null);
   const [regenLoading,   setRegenLoading]   = useState(false);
+  const [localImages,     setLocalImages]    = useState<string[]>([]);
+  const [imagePrompt,     setImagePrompt]    = useState("");
+  const [imageBusy,       setImageBusy]      = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   /* ── Realtime Firestore listener ── */
@@ -158,6 +187,8 @@ export default function Dashboard() {
       if (e.data?.type === "matrix-img-click") {
         setSelectedImgSrc(e.data.src as string);
         setImgPanel(true);
+      } else if (e.data?.type === "matrix-html-change" && typeof e.data.html === "string") {
+        setEditedHtml(e.data.html);
       }
     };
     window.addEventListener("message", handler);
@@ -250,49 +281,58 @@ export default function Dashboard() {
     setSelectedImgSrc(null);
   };
 
+  const uploadImages = async (files: FileList | null) => {
+    if (!files?.length) return;
+    try {
+      const images = await Promise.all(Array.from(files).filter((file) => file.type.startsWith("image/")).map((file) => fileToImageDataUrl(file)));
+      setLocalImages((prev) => [...images, ...prev].slice(0, 16));
+      toast.success(`${images.length} image${images.length === 1 ? "" : "s"} added`);
+    } catch (error: any) {
+      toast.error(error?.message ?? "Image upload failed");
+    }
+  };
+
+  const generateImageAsset = async () => {
+    if (!imagePrompt.trim()) return;
+    setImageBusy(true);
+    try {
+      const result = await completeWebsiteAI([
+        { role: "system", content: "Return only one complete SVG image. No markdown, no explanation." },
+        { role: "user", content: imagePrompt },
+      ], { prefer: "sambanova", timeoutMs: 60_000 });
+      const svg = cleanHTML(result.content);
+      if (!svg.toLowerCase().includes("<svg")) throw new Error("AI did not return an SVG image");
+      setLocalImages((prev) => [svgDataUrl(svg), ...prev].slice(0, 16));
+      setImagePrompt("");
+      toast.success("Image generated");
+    } catch (error: any) {
+      toast.error(error?.message ?? "Image generation failed");
+    } finally {
+      setImageBusy(false);
+    }
+  };
+
   /* ── Regenerate with Codestral ── */
   const regen = async () => {
     if (!active) return;
     setRegenLoading(true);
     try {
-      const r = await fetch(CODESTRAL_CHAT_URL, {
-        method: "POST",
-        headers: getCodestralHeaders(),
-        body: JSON.stringify({
-          model: "codestral-latest",
-          messages: [
-            {
-              role: "system",
-              content:
-                "You are MATRIX-AI. Output ONLY complete HTML starting with <!DOCTYPE html>. " +
-                "Use Tailwind CDN. Modern, responsive, beautiful.",
-            },
-            {
-              role: "user",
-              content: "Regenerate and improve this page: " + active.prompt,
-            },
-          ],
-          temperature: 0.2,
-          max_tokens: 2048,
-        }),
-      });
-      if (r.ok) {
-        const data = await r.json();
-        let html: string = data?.choices?.[0]?.message?.content ?? "";
-        html = html
-          .replace(/^```html\s*/i, "")
-          .replace(/^```\s*/, "")
-          .replace(/\s*```$/, "")
-          .trim();
-        if (html.length > 80) {
-          setEditedHtml(html);
-          setActive((prev) => (prev ? { ...prev, html } : null));
-          await updateDoc(doc(db, "generations", active.id), { html });
-          toast.success("Regenerated!");
-        }
-      } else {
-        toast.error(explainCodestralError(r.status));
-      }
+      const result = await completeWebsiteAI([
+        {
+          role: "system",
+          content: "You are MATRIX-AI. Output ONLY complete HTML starting with <!DOCTYPE html>. Use Tailwind CDN. Modern, responsive, beautiful.",
+        },
+        {
+          role: "user",
+          content: `Improve this existing page and output the FULL updated HTML only. Prompt: ${active.prompt}\n\nCurrent HTML:\n${editedHtml || active.html}`,
+        },
+      ], { prefer: "sambanova", timeoutMs: 90_000 });
+      const html = ensureHTML(cleanHTML(result.content));
+      if (html.length <= 80) throw new Error("AI returned an incomplete page");
+      setEditedHtml(html);
+      setActive((prev) => (prev ? { ...prev, html } : null));
+      await updateDoc(doc(db, "generations", active.id), { html, updated_at: new Date().toISOString() });
+      toast.success(`Regenerated with ${result.provider}`);
     } catch (e: any) {
       toast.error(e.message ?? "Regen failed");
     } finally {
