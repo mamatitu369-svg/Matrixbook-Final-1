@@ -336,6 +336,24 @@ export default function Build() {
         </div>
 
         <div className="flex items-center gap-1">
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => setMediaOpen(true)}
+            title="Image tools"
+            className="text-white/70 hover:text-white"
+          >
+            <ImageIcon className="w-4 h-4" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => setSettingsOpen(true)}
+            title="AI settings"
+            className="text-white/70 hover:text-white"
+          >
+            <Settings className="w-4 h-4" />
+          </Button>
           {history.length > 0 && (
             <Button
               size="icon"
@@ -531,11 +549,15 @@ export default function Build() {
                 : "Describe what to build..."
             }
             className="flex-1 bg-transparent outline-none text-sm placeholder:text-white/30"
-            disabled={loading}
           />
+          {queuedCount > 0 && (
+            <span className="text-[10px] font-mono text-blue-300 px-2 py-1 rounded-md bg-blue-500/10 border border-blue-500/20">
+              {queuedCount} queued
+            </span>
+          )}
           <Button
             onClick={() => run(draft)}
-            disabled={loading || !draft.trim()}
+            disabled={!draft.trim()}
             size="icon"
             className="bg-blue-600 hover:bg-blue-500 text-white rounded-xl shrink-0 disabled:opacity-40"
           >
