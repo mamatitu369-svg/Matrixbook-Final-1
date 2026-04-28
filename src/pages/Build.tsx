@@ -616,6 +616,48 @@ export default function Build() {
         </div>
       )}
 
+      <Dialog open={mediaOpen} onOpenChange={setMediaOpen}>
+        <DialogContent className="glass-strong max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><ImageIcon className="w-4 h-4 text-primary" /> Image studio</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <label className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border p-6 cursor-pointer hover:border-primary/60 transition-colors">
+              <Upload className="w-5 h-5 text-primary" />
+              <span className="text-sm text-white/80">Upload local gallery images</span>
+              <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => uploadImages(e.target.files)} />
+            </label>
+            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+              <Textarea value={imagePrompt} onChange={(e) => setImagePrompt(e.target.value)} placeholder="Prompt an image/SVG asset for this website..." className="min-h-20 bg-white/5 border-white/10 text-white" />
+              <Button onClick={generateImageAsset} disabled={imageBusy || !imagePrompt.trim()} className="self-end bg-blue-600 hover:bg-blue-500 text-white">
+                {imageBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />} Generate
+              </Button>
+            </div>
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-72 overflow-auto">
+              {gallery.map((src, i) => (
+                <button key={i} onClick={() => applyGalleryToPrompt(src)} className="aspect-square rounded-lg overflow-hidden border border-white/10 hover:border-blue-400 transition-colors">
+                  <img src={src} alt={`Gallery asset ${i + 1}`} className="w-full h-full object-cover" />
+                </button>
+              ))}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogContent className="glass-strong max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Settings className="w-4 h-4 text-primary" /> AI settings</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input value={sambaKeyDraft} onChange={(e) => setSambaKeyDraft(e.target.value)} placeholder="SambaNova API key" className="bg-white/5 border-white/10 text-white" />
+            <Button className="w-full bg-blue-600 hover:bg-blue-500 text-white" onClick={() => { saveStoredSambaNovaKey(sambaKeyDraft); setSettingsOpen(false); toast.success("SambaNova key saved for this browser"); }}>
+              Save AI key
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Mobile preview FAB */}
       {isMobile && html && (
         <button
