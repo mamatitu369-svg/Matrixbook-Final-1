@@ -525,6 +525,7 @@ export default function Dashboard() {
         <DialogContent className="max-w-[95vw] w-full h-[92vh] p-0 overflow-hidden glass-strong flex flex-col">
           {/* Toolbar */}
           <DialogHeader className="px-4 py-3 border-b border-border/60 shrink-0">
+            <DialogDescription className="sr-only">Preview, edit, regenerate, and save the selected generated website.</DialogDescription>
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <DialogTitle className="font-mono text-xs text-muted-foreground truncate max-w-xs">
                 {active?.prompt}
@@ -675,9 +676,33 @@ export default function Dashboard() {
             <DialogTitle className="flex items-center gap-2">
               <ShoppingBag className="w-4 h-4 text-primary" /> Image Library
             </DialogTitle>
+            <DialogDescription>Upload local images, generate realistic images, then copy or replace images in your page.</DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
+            <label className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border p-5 cursor-pointer hover:border-primary/60 transition-colors">
+              <Upload className="w-5 h-5 text-primary" />
+              <span className="text-sm text-muted-foreground">Upload local images</span>
+              <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => uploadImages(e.target.files)} />
+            </label>
+
+            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+              <Textarea value={imagePrompt} onChange={(e) => setImagePrompt(e.target.value)} placeholder="Generate a realistic image, e.g. luxury SaaS dashboard hero photo…" className="min-h-20 bg-muted/30" />
+              <Button onClick={generateImageAsset} disabled={imageBusy || !imagePrompt.trim()} className="self-end">
+                {imageBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />} Generate
+              </Button>
+            </div>
+
+            {localImages.length > 0 && (
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-44 overflow-y-auto scrollbar-thin">
+                {localImages.map((src, i) => (
+                  <button key={i} onClick={() => (selectedImgSrc ? replaceImage(src) : copyText(src))} className="aspect-square rounded-lg overflow-hidden border border-border/50 hover:border-primary/60 transition-all group relative">
+                    <img src={src} alt={`Local image ${i + 1}`} className="w-full h-full object-cover" loading="lazy" />
+                  </button>
+                ))}
+              </div>
+            )}
+
             {/* Category chips */}
             <div className="flex flex-wrap gap-2">
               {IMG_CATS.map((c) => (
