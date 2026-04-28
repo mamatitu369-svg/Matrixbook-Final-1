@@ -6,9 +6,9 @@ type RuntimeEnvKey =
   | "VITE_FIREBASE_MESSAGING_SENDER_ID"
   | "VITE_FIREBASE_APP_ID"
   | "VITE_FIREBASE_MEASUREMENT_ID"
-  | "VITE_CODESTRAL_API_KEY"
-  | "VITE_CODESTRAL_CHAT_ENDPOINT"
-  | "VITE_CODESTRAL_FIM_ENDPOINT"
+  | "VITE_MISTRAL_API_KEY"
+  | "VITE_MISTRAL_CHAT_ENDPOINT"
+  | "VITE_MISTRAL_MODEL"
   | "VITE_SAMBANOVA_API_KEY"
   | "VITE_SAMBANOVA_CHAT_ENDPOINT"
   | "VITE_SAMBANOVA_MODEL";
@@ -28,16 +28,13 @@ export const appEnv = {
     appId: readEnv("VITE_FIREBASE_APP_ID"),
     measurementId: readEnv("VITE_FIREBASE_MEASUREMENT_ID"),
   },
-  codestral: {
-    apiKey: readEnv("VITE_CODESTRAL_API_KEY"),
+  mistral: {
+    apiKey: readEnv("VITE_MISTRAL_API_KEY"),
     chatEndpoint: readEnv(
-      "VITE_CODESTRAL_CHAT_ENDPOINT",
-      "https://codestral.mistral.ai/v1/chat/completions",
+      "VITE_MISTRAL_CHAT_ENDPOINT",
+      "https://api.mistral.ai/v1/chat/completions",
     ),
-    fimEndpoint: readEnv(
-      "VITE_CODESTRAL_FIM_ENDPOINT",
-      "https://codestral.mistral.ai/v1/fim/completions",
-    ),
+    model: readEnv("VITE_MISTRAL_MODEL", "codestral-latest"),
   },
   sambanova: {
     apiKey: readEnv("VITE_SAMBANOVA_API_KEY"),
@@ -58,9 +55,10 @@ export const firebaseMissingEnvKeys = [
   ["VITE_FIREBASE_APP_ID", appEnv.firebase.appId],
 ].flatMap(([key, value]) => (value ? [] : [key]));
 
-export const codestralMissingEnvKeys = [
-  ["VITE_CODESTRAL_API_KEY", appEnv.codestral.apiKey],
-  ["VITE_CODESTRAL_CHAT_ENDPOINT", appEnv.codestral.chatEndpoint],
+export const mistralMissingEnvKeys = [
+  ["VITE_MISTRAL_API_KEY", appEnv.mistral.apiKey],
+  ["VITE_MISTRAL_CHAT_ENDPOINT", appEnv.mistral.chatEndpoint],
+  ["VITE_MISTRAL_MODEL", appEnv.mistral.model],
 ].flatMap(([key, value]) => (value ? [] : [key]));
 
 export const sambanovaMissingEnvKeys = [
@@ -70,5 +68,5 @@ export const sambanovaMissingEnvKeys = [
 ].flatMap(([key, value]) => (value ? [] : [key]));
 
 export const isFirebaseConfigured = firebaseMissingEnvKeys.length === 0;
-export const isCodestralConfigured = codestralMissingEnvKeys.length === 0;
+export const isMistralConfigured = mistralMissingEnvKeys.length === 0;
 export const isSambaNovaConfigured = sambanovaMissingEnvKeys.length === 0;
