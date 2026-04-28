@@ -26,6 +26,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -70,7 +71,6 @@ function injectEditor(html: string): string {
     "document.querySelectorAll('h1,h2,h3,h4,h5,h6,p,span,a,li,button,label').forEach(function(el){",
     "  el.setAttribute('contenteditable','true');",
     "  el.setAttribute('data-me','1');",
-    "  el.addEventListener('input',function(){window.parent.postMessage({type:'matrix-html-change',html:'<!DOCTYPE html>'+document.documentElement.outerHTML},'*');});",
     "  el.addEventListener('blur',function(){window.parent.postMessage({type:'matrix-html-change',html:'<!DOCTYPE html>'+document.documentElement.outerHTML},'*');});",
     "});",
     "document.querySelectorAll('img').forEach(function(img){",
@@ -108,8 +108,34 @@ function ensureHTML(html: string) {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script></head><body>${html}</body></html>`;
 }
 
-function svgDataUrl(svg: string) {
-  return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
+function sanitizeEditorHTML(html: string) {
+  try {
+    const doc = new DOMParser().parseFromString(ensureHTML(html), "text/html");
+    doc.querySelectorAll("script").forEach((script) => {
+      if (script.textContent?.includes("matrix-html-change") || script.textContent?.includes("matrix-img-click")) {
+        script.remove();
+      }
+    });
+    doc.querySelectorAll("[data-me]").forEach((el) => {
+      el.removeAttribute("data-me");
+      el.removeAttribute("contenteditable");
+    });
+    return `<!DOCTYPE html>${doc.documentElement.outerHTML}`;
+  } catch {
+    return ensureHTML(html);
+  }
+}
+
+function realisticImageUrl(prompt: string) {
+  const params = new URLSearchParams({
+    width: "1024",
+    height: "768",
+    seed: String(Date.now()),
+    model: "flux",
+    nologo: "true",
+    enhance: "true",
+  });
+  return `https://image.pollinations.ai/prompt/${encodeURIComponent(`${prompt}, realistic, professional photography, high detail, natural lighting`)}?${params.toString()}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -188,7 +214,7 @@ export default function Dashboard() {
         setSelectedImgSrc(e.data.src as string);
         setImgPanel(true);
       } else if (e.data?.type === "matrix-html-change" && typeof e.data.html === "string") {
-        setEditedHtml(e.data.html);
+        setEditedHtml(sanitizeEditorHTML(e.data.html));
       }
     };
     window.addEventListener("message", handler);
@@ -219,10 +245,11 @@ export default function Dashboard() {
   const saveEdits = async () => {
     if (!active) return;
     const iframe = iframeRef.current;
-    const liveHtml =
+    const liveHtml = sanitizeEditorHTML(
       iframe?.contentDocument?.documentElement?.outerHTML
         ? "<!DOCTYPE html>" + iframe.contentDocument.documentElement.outerHTML
-        : editedHtml;
+        : editedHtml,
+    );
     try {
       await updateDoc(doc(db, "generations", active.id), { html: liveHtml });
       setActive((prev) => (prev ? { ...prev, html: liveHtml } : null));
@@ -296,13 +323,14 @@ export default function Dashboard() {
     if (!imagePrompt.trim()) return;
     setImageBusy(true);
     try {
-      const result = await completeWebsiteAI([
-        { role: "system", content: "Return only one complete SVG image. No markdown, no explanation." },
-        { role: "user", content: imagePrompt },
-      ], { prefer: "sambanova", timeoutMs: 60_000 });
-      const svg = cleanHTML(result.content);
-      if (!svg.toLowerCase().includes("<svg")) throw new Error("AI did not return an SVG image");
-      setLocalImages((prev) => [svgDataUrl(svg), ...prev].slice(0, 16));
+      const src = realisticImageUrl(imagePrompt);
+      await new Promise<void>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("Image model failed to render"));
+        img.src = src;
+      });
+      setLocalImages((prev) => [src, ...prev].slice(0, 16));
       setImagePrompt("");
       toast.success("Image generated");
     } catch (error: any) {
@@ -515,6 +543,7 @@ export default function Dashboard() {
         <DialogContent className="max-w-[95vw] w-full h-[92vh] p-0 overflow-hidden glass-strong flex flex-col">
           {/* Toolbar */}
           <DialogHeader className="px-4 py-3 border-b border-border/60 shrink-0">
+            <DialogDescription className="sr-only">Preview, edit, regenerate, and save the selected generated website.</DialogDescription>
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <DialogTitle className="font-mono text-xs text-muted-foreground truncate max-w-xs">
                 {active?.prompt}
@@ -665,9 +694,33 @@ export default function Dashboard() {
             <DialogTitle className="flex items-center gap-2">
               <ShoppingBag className="w-4 h-4 text-primary" /> Image Library
             </DialogTitle>
+            <DialogDescription>Upload local images, generate realistic images, then copy or replace images in your page.</DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
+            <label className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border p-5 cursor-pointer hover:border-primary/60 transition-colors">
+              <Upload className="w-5 h-5 text-primary" />
+              <span className="text-sm text-muted-foreground">Upload local images</span>
+              <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => uploadImages(e.target.files)} />
+            </label>
+
+            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+              <Textarea value={imagePrompt} onChange={(e) => setImagePrompt(e.target.value)} placeholder="Generate a realistic image, e.g. luxury SaaS dashboard hero photo…" className="min-h-20 bg-muted/30" />
+              <Button onClick={generateImageAsset} disabled={imageBusy || !imagePrompt.trim()} className="self-end">
+                {imageBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />} Generate
+              </Button>
+            </div>
+
+            {localImages.length > 0 && (
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-44 overflow-y-auto scrollbar-thin">
+                {localImages.map((src, i) => (
+                  <button key={i} onClick={() => (selectedImgSrc ? replaceImage(src) : copyText(src))} className="aspect-square rounded-lg overflow-hidden border border-border/50 hover:border-primary/60 transition-all group relative">
+                    <img src={src} alt={`Local image ${i + 1}`} className="w-full h-full object-cover" loading="lazy" />
+                  </button>
+                ))}
+              </div>
+            )}
+
             {/* Category chips */}
             <div className="flex flex-wrap gap-2">
               {IMG_CATS.map((c) => (
