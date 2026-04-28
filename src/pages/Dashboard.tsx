@@ -281,6 +281,37 @@ export default function Dashboard() {
     setSelectedImgSrc(null);
   };
 
+  const uploadImages = async (files: FileList | null) => {
+    if (!files?.length) return;
+    try {
+      const images = await Promise.all(Array.from(files).filter((file) => file.type.startsWith("image/")).map((file) => fileToImageDataUrl(file)));
+      setLocalImages((prev) => [...images, ...prev].slice(0, 16));
+      toast.success(`${images.length} image${images.length === 1 ? "" : "s"} added`);
+    } catch (error: any) {
+      toast.error(error?.message ?? "Image upload failed");
+    }
+  };
+
+  const generateImageAsset = async () => {
+    if (!imagePrompt.trim()) return;
+    setImageBusy(true);
+    try {
+      const result = await completeWebsiteAI([
+        { role: "system", content: "Return only one complete SVG image. No markdown, no explanation." },
+        { role: "user", content: imagePrompt },
+      ], { prefer: "sambanova", timeoutMs: 60_000 });
+      const svg = cleanHTML(result.content);
+      if (!svg.toLowerCase().includes("<svg")) throw new Error("AI did not return an SVG image");
+      setLocalImages((prev) => [svgDataUrl(svg), ...prev].slice(0, 16));
+      setImagePrompt("");
+      toast.success("Image generated");
+    } catch (error: any) {
+      toast.error(error?.message ?? "Image generation failed");
+    } finally {
+      setImageBusy(false);
+    }
+  };
+
   /* ── Regenerate with Codestral ── */
   const regen = async () => {
     if (!active) return;
