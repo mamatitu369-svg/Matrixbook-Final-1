@@ -1,4 +1,4 @@
-/// <reference types="vite/client" />
+// <reference types="vite/client" />
 
 interface ImportMetaEnv {
   readonly BASE_URL: string;
@@ -13,9 +13,9 @@ interface ImportMetaEnv {
   readonly VITE_FIREBASE_MESSAGING_SENDER_ID: string;
   readonly VITE_FIREBASE_APP_ID: string;
   readonly VITE_FIREBASE_MEASUREMENT_ID: string;
-  readonly VITE_CODESTRAL_API_KEY: string;
-  readonly VITE_CODESTRAL_CHAT_ENDPOINT: string;
-  readonly VITE_CODESTRAL_FIM_ENDPOINT: string;
+  readonly VITE_MISTRAL_API_KEY: string;
+  readonly VITE_MISTRAL_CHAT_ENDPOINT: string;
+  readonly VITE_MISTRAL_MODEL: string;
   readonly VITE_SAMBANOVA_API_KEY: string;
   readonly VITE_SAMBANOVA_CHAT_ENDPOINT: string;
   readonly VITE_SAMBANOVA_MODEL: string;
