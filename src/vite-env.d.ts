@@ -16,6 +16,9 @@ interface ImportMetaEnv {
   readonly VITE_CODESTRAL_API_KEY: string;
   readonly VITE_CODESTRAL_CHAT_ENDPOINT: string;
   readonly VITE_CODESTRAL_FIM_ENDPOINT: string;
+  readonly VITE_SAMBANOVA_API_KEY: string;
+  readonly VITE_SAMBANOVA_CHAT_ENDPOINT: string;
+  readonly VITE_SAMBANOVA_MODEL: string;
 }
 
 interface ImportMeta {
