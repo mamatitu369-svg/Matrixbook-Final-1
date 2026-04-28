@@ -22,7 +22,7 @@ import { Link, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
 import { collection, addDoc, doc, updateDoc } from "firebase/firestore";
@@ -105,8 +105,16 @@ async function fileToImageDataUrl(file: File, maxSize = 1200, quality = 0.82) {
   return canvas.toDataURL("image/jpeg", quality);
 }
 
-function svgDataUrl(svg: string) {
-  return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
+function realisticImageUrl(prompt: string) {
+  const params = new URLSearchParams({
+    width: "1024",
+    height: "768",
+    seed: String(Date.now()),
+    model: "flux",
+    nologo: "true",
+    enhance: "true",
+  });
+  return `https://image.pollinations.ai/prompt/${encodeURIComponent(`${prompt}, realistic, professional photography, high detail, natural lighting`)}?${params.toString()}`;
 }
 
 export default function Build() {
@@ -292,13 +300,14 @@ export default function Build() {
     if (!imagePrompt.trim()) return;
     setImageBusy(true);
     try {
-      const result = await completeWebsiteAI([
-        { role: "system", content: "Return only one complete SVG image. No markdown. No explanation. Use rich gradients, shapes, and polished poster-like composition." },
-        { role: "user", content: imagePrompt },
-      ], { prefer: "sambanova", timeoutMs: 60_000 });
-      const svg = result.content.replace(/^```svg/i, "").replace(/^```/, "").replace(/```$/, "").trim();
-      if (!svg.toLowerCase().includes("<svg")) throw new Error("AI did not return an SVG image");
-      setGallery((prev) => [svgDataUrl(svg), ...prev].slice(0, 12));
+      const src = realisticImageUrl(imagePrompt);
+      await new Promise<void>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("Image model failed to render"));
+        img.src = src;
+      });
+      setGallery((prev) => [src, ...prev].slice(0, 12));
       setImagePrompt("");
       toast.success("Image generated");
     } catch (error: any) {
@@ -620,6 +629,7 @@ export default function Build() {
         <DialogContent className="glass-strong max-w-2xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2"><ImageIcon className="w-4 h-4 text-primary" /> Image studio</DialogTitle>
+            <DialogDescription>Upload local images or generate realistic images for the current website prompt.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <label className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border p-6 cursor-pointer hover:border-primary/60 transition-colors">
@@ -648,6 +658,7 @@ export default function Build() {
         <DialogContent className="glass-strong max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2"><Settings className="w-4 h-4 text-primary" /> AI settings</DialogTitle>
+            <DialogDescription>Save a SambaNova key in this browser for AI website generation.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <Input value={sambaKeyDraft} onChange={(e) => setSambaKeyDraft(e.target.value)} placeholder="SambaNova API key" className="bg-white/5 border-white/10 text-white" />
