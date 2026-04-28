@@ -159,148 +159,102 @@ export default function Build() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── AI generation via Codestral ────────────────────────────────
-  const callCodestral = async (
-    messages: { role: string; content: string }[],
-    attempt = 1,
-  ): Promise<Response> => {
-    const headers = getCodestralHeaders();
+  const persistBuild = async (prompt: string, generatedHtml: string) => {
+    if (!user) return;
+    try {
+      if (!docIdRef.current) {
+        const created = await addDoc(collection(db, "generations"), {
+          user_id: user.uid,
+          prompt,
+          html: generatedHtml,
+          title: prompt.slice(0, 60),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+        docIdRef.current = created.id;
+        setDocId(created.id);
+      } else {
+        await updateDoc(doc(db, "generations", docIdRef.current), {
+          html: generatedHtml,
+          updated_at: new Date().toISOString(),
+        });
+      }
+    } catch (saveErr) {
+      console.warn("Firestore save failed:", saveErr);
+      toast.error("Saved preview locally, but cloud save failed");
+    }
+  };
 
-    // 90s client-side timeout — Mistral upstream can be slow
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 90_000);
+  const processPrompt = async (prompt: string) => {
+    const currentHtml = htmlRef.current;
+    const isFollowUp = currentHtml.length > 0;
+    const userTurn: ChatTurn = { role: "user", content: prompt };
+    const nextHistory = [...historyRef.current, userTurn];
+    historyRef.current = nextHistory;
+    setHistory(nextHistory);
 
     try {
-      const r = await fetch(CODESTRAL_CHAT_URL, {
-        method: "POST",
-        headers,
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: "codestral-latest",
-          messages,
-          temperature: 0.15,
-          max_tokens: 2048,
-        }),
-      });
-
-      if ((r.status === 502 || r.status === 503 || r.status === 504) && attempt < 2) {
-        console.warn(`Codestral ${r.status} — retrying (attempt ${attempt + 1})`);
-        await new Promise((res) => setTimeout(res, 1500));
-        return callCodestral(messages, attempt + 1);
+      const imageContext = gallery.length
+        ? `\n\nUser gallery images available as data URLs. Use these when relevant:\n${gallery.slice(0, 4).join("\n")}`
+        : "";
+      const messages = [
+        { role: "system", content: BASE_SYSTEM },
+        {
+          role: "user",
+          content: isFollowUp
+            ? `Current HTML:\n\n${currentHtml}\n\nApply this next change and output the FULL updated HTML only:\n\n${prompt}${imageContext}`
+            : `Build this as a complete, polished, fully interactive single-file web app/page. Output ONLY the HTML:\n\n${prompt}${imageContext}`,
+        },
+      ];
+      const result = await completeWebsiteAI(messages, { prefer: "sambanova", timeoutMs: 90_000 });
+      let generatedHtml = ensureHTML(cleanHTML(result.content));
+      if (!generatedHtml || generatedHtml.length < 80) generatedHtml = isFollowUp ? currentHtml : fallbackHTML(prompt);
+      htmlRef.current = generatedHtml;
+      setHtml(generatedHtml);
+      const doneHistory = [...nextHistory, { role: "assistant", content: `✓ Updated with ${result.provider}.` }];
+      historyRef.current = doneHistory;
+      setHistory(doneHistory);
+      await persistBuild(prompt, generatedHtml);
+      toast.success(isFollowUp ? "Updated" : "Build ready");
+    } catch (e: any) {
+      console.error("run() error:", e);
+      toast.error(e?.name === "AbortError" ? "AI request timed out" : e?.message ?? "Generation failed");
+      if (!currentHtml) {
+        const fallback = fallbackHTML(prompt);
+        htmlRef.current = fallback;
+        setHtml(fallback);
       }
-      return r;
+    }
+  };
+
+  const drainQueue = async (first: string) => {
+    loadingRef.current = true;
+    setLoading(true);
+    try {
+      await processPrompt(first);
+      while (queueRef.current.length > 0) {
+        const next = queueRef.current.shift();
+        setQueuedCount(queueRef.current.length);
+        if (next) await processPrompt(next);
+      }
     } finally {
-      clearTimeout(timer);
+      loadingRef.current = false;
+      setLoading(false);
+      setQueuedCount(0);
     }
   };
 
   const run = async (prompt: string) => {
-    if (!prompt.trim() || loading) return;
-    setLoading(true);
-    // Clear input immediately so user can keep typing
+    const next = prompt.trim();
+    if (!next) return;
     setDraft("");
-
-    const isFollowUp = html.length > 0;
-    const userTurn: ChatTurn = { role: "user", content: prompt };
-    const newHistory: ChatTurn[] = [...history, userTurn];
-    setHistory(newHistory);
-
-    try {
-      // Build the message list. For follow-ups, include previous HTML so the
-      // model can iterate on it instead of starting from scratch.
-      const messages: { role: string; content: string }[] = [
-        { role: "system", content: BASE_SYSTEM },
-      ];
-
-      if (isFollowUp) {
-        messages.push({
-          role: "user",
-          content: `Here is the current HTML page you previously generated:\n\n${html}\n\nNow apply this change and output the FULL updated HTML page only:\n\n${prompt}`,
-        });
-      } else {
-        messages.push({
-          role: "user",
-          content: `Build the following as a complete, beautiful, fully working HTML page. Output ONLY the HTML, nothing else:\n\n${prompt}`,
-        });
-      }
-
-      let generatedHtml = "";
-
-      let r: Response;
-      try {
-        r = await callCodestral(messages);
-      } catch (networkErr: any) {
-        const aborted = networkErr?.name === "AbortError";
-        console.error("Network error calling Codestral:", networkErr);
-        toast.error(
-          aborted
-            ? "AI request timed out — try a shorter prompt"
-            : "Network error — check your connection",
-        );
-        if (!isFollowUp) setHtml(fallbackHTML(prompt));
-        return;
-      }
-
-      if (r.ok) {
-        const data = await r.json();
-        generatedHtml = data?.choices?.[0]?.message?.content ?? "";
-        if (!generatedHtml) {
-          console.warn("Codestral returned empty content:", data);
-          toast.error("AI returned empty response");
-        }
-      } else {
-        let errBody = "";
-        try { errBody = await r.text(); } catch { /* ignore */ }
-        console.error(`Codestral ${r.status}:`, errBody);
-        toast.error(explainCodestralError(r.status));
-        if (!isFollowUp) generatedHtml = fallbackHTML(prompt);
-      }
-
-      generatedHtml = cleanHTML(generatedHtml);
-      if (!generatedHtml || generatedHtml.length < 80) {
-        if (isFollowUp) {
-          // Don't wipe a working page on a bad follow-up
-          return;
-        }
-        generatedHtml = fallbackHTML(prompt);
-      }
-      generatedHtml = ensureHTML(generatedHtml);
-
-      setHtml(generatedHtml);
-      setHistory([...newHistory, { role: "assistant", content: "✓ Updated the page." }]);
-      toast.success(isFollowUp ? "Updated 🎨" : "Build Ready 🚀");
-
-      // Persist to Firestore — create on first turn, update on follow-ups
-      if (user) {
-        try {
-          if (!docId) {
-            const created = await addDoc(collection(db, "generations"), {
-              user_id: user.uid,
-              prompt,
-              html: generatedHtml,
-              title: prompt.slice(0, 60),
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            });
-            setDocId(created.id);
-          } else {
-            await updateDoc(doc(db, "generations", docId), {
-              html: generatedHtml,
-              updated_at: new Date().toISOString(),
-            });
-          }
-        } catch (saveErr) {
-          console.warn("Firestore save failed:", saveErr);
-        }
-      }
-    } catch (e: any) {
-      console.error("run() error:", e);
-      toast.error(e?.message ?? "Generation failed");
-      if (!html) setHtml(fallbackHTML(prompt));
-    } finally {
-      // Always release the input — this is the key fix for the "stuck" chat
-      setLoading(false);
+    if (loadingRef.current) {
+      queueRef.current.push(next);
+      setQueuedCount(queueRef.current.length);
+      toast.message("Prompt queued");
+      return;
     }
+    await drainQueue(next);
   };
 
   // ── Download ───────────────────────────────────────────────────
