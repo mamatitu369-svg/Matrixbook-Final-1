@@ -34,7 +34,7 @@ type ChatTurn = { role: "user" | "assistant"; content: string };
 
 type Device = "desktop" | "tablet" | "mobile";
 
-const BASE_SYSTEM = `You are MATRIX-AI, an expert web developer powered by Codestral.
+const BASE_SYSTEM = `You are MATRIX-AI, an expert web developer powered by Mistral.
 
 STRICT OUTPUT RULES:
 - Output ONLY a single complete HTML file
@@ -214,7 +214,7 @@ export default function Build() {
             : `Build this as a complete, polished, fully interactive single-file web app/page. Output ONLY the HTML:\n\n${prompt}${imageContext}`,
         },
       ];
-      const result = await completeWebsiteAI(messages, { prefer: "sambanova", timeoutMs: 90_000 });
+const result = await completeWebsiteAI(messages, { prefer: "mistral", timeoutMs: 90_000 });
       let generatedHtml = ensureHTML(cleanHTML(result.content));
       if (!generatedHtml || generatedHtml.length < 80) generatedHtml = isFollowUp ? currentHtml : fallbackHTML(prompt);
       htmlRef.current = generatedHtml;
