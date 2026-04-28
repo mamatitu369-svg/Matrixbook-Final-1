@@ -211,7 +211,10 @@ export default function Build() {
       if (!generatedHtml || generatedHtml.length < 80) generatedHtml = isFollowUp ? currentHtml : fallbackHTML(prompt);
       htmlRef.current = generatedHtml;
       setHtml(generatedHtml);
-      const doneHistory = [...nextHistory, { role: "assistant", content: `✓ Updated with ${result.provider}.` }];
+      const doneHistory: ChatTurn[] = [
+        ...nextHistory,
+        { role: "assistant", content: `✓ Updated with ${result.provider}.` },
+      ];
       historyRef.current = doneHistory;
       setHistory(doneHistory);
       await persistBuild(prompt, generatedHtml);
