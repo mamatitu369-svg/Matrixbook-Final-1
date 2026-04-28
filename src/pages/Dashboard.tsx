@@ -187,6 +187,8 @@ export default function Dashboard() {
       if (e.data?.type === "matrix-img-click") {
         setSelectedImgSrc(e.data.src as string);
         setImgPanel(true);
+      } else if (e.data?.type === "matrix-html-change" && typeof e.data.html === "string") {
+        setEditedHtml(e.data.html);
       }
     };
     window.addEventListener("message", handler);
@@ -284,44 +286,22 @@ export default function Dashboard() {
     if (!active) return;
     setRegenLoading(true);
     try {
-      const r = await fetch(CODESTRAL_CHAT_URL, {
-        method: "POST",
-        headers: getCodestralHeaders(),
-        body: JSON.stringify({
-          model: "codestral-latest",
-          messages: [
-            {
-              role: "system",
-              content:
-                "You are MATRIX-AI. Output ONLY complete HTML starting with <!DOCTYPE html>. " +
-                "Use Tailwind CDN. Modern, responsive, beautiful.",
-            },
-            {
-              role: "user",
-              content: "Regenerate and improve this page: " + active.prompt,
-            },
-          ],
-          temperature: 0.2,
-          max_tokens: 2048,
-        }),
-      });
-      if (r.ok) {
-        const data = await r.json();
-        let html: string = data?.choices?.[0]?.message?.content ?? "";
-        html = html
-          .replace(/^```html\s*/i, "")
-          .replace(/^```\s*/, "")
-          .replace(/\s*```$/, "")
-          .trim();
-        if (html.length > 80) {
-          setEditedHtml(html);
-          setActive((prev) => (prev ? { ...prev, html } : null));
-          await updateDoc(doc(db, "generations", active.id), { html });
-          toast.success("Regenerated!");
-        }
-      } else {
-        toast.error(explainCodestralError(r.status));
-      }
+      const result = await completeWebsiteAI([
+        {
+          role: "system",
+          content: "You are MATRIX-AI. Output ONLY complete HTML starting with <!DOCTYPE html>. Use Tailwind CDN. Modern, responsive, beautiful.",
+        },
+        {
+          role: "user",
+          content: `Improve this existing page and output the FULL updated HTML only. Prompt: ${active.prompt}\n\nCurrent HTML:\n${editedHtml || active.html}`,
+        },
+      ], { prefer: "sambanova", timeoutMs: 90_000 });
+      const html = ensureHTML(cleanHTML(result.content));
+      if (html.length <= 80) throw new Error("AI returned an incomplete page");
+      setEditedHtml(html);
+      setActive((prev) => (prev ? { ...prev, html } : null));
+      await updateDoc(doc(db, "generations", active.id), { html, updated_at: new Date().toISOString() });
+      toast.success(`Regenerated with ${result.provider}`);
     } catch (e: any) {
       toast.error(e.message ?? "Regen failed");
     } finally {
