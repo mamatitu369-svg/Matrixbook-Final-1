@@ -26,6 +26,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -108,8 +109,16 @@ function ensureHTML(html: string) {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><script src="https://cdn.tailwindcss.com"></script></head><body>${html}</body></html>`;
 }
 
-function svgDataUrl(svg: string) {
-  return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
+function realisticImageUrl(prompt: string) {
+  const params = new URLSearchParams({
+    width: "1024",
+    height: "768",
+    seed: String(Date.now()),
+    model: "flux",
+    nologo: "true",
+    enhance: "true",
+  });
+  return `https://image.pollinations.ai/prompt/${encodeURIComponent(`${prompt}, realistic, professional photography, high detail, natural lighting`)}?${params.toString()}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -296,13 +305,14 @@ export default function Dashboard() {
     if (!imagePrompt.trim()) return;
     setImageBusy(true);
     try {
-      const result = await completeWebsiteAI([
-        { role: "system", content: "Return only one complete SVG image. No markdown, no explanation." },
-        { role: "user", content: imagePrompt },
-      ], { prefer: "sambanova", timeoutMs: 60_000 });
-      const svg = cleanHTML(result.content);
-      if (!svg.toLowerCase().includes("<svg")) throw new Error("AI did not return an SVG image");
-      setLocalImages((prev) => [svgDataUrl(svg), ...prev].slice(0, 16));
+      const src = realisticImageUrl(imagePrompt);
+      await new Promise<void>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("Image model failed to render"));
+        img.src = src;
+      });
+      setLocalImages((prev) => [src, ...prev].slice(0, 16));
       setImagePrompt("");
       toast.success("Image generated");
     } catch (error: any) {
