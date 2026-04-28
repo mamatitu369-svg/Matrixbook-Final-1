@@ -14,13 +14,14 @@ import { useAuth } from "@/hooks/useAuth";
 import { Navbar } from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { CODESTRAL_CHAT_URL, explainCodestralError, getCodestralHeaders } from "@/lib/codestral";
+import { completeWebsiteAI } from "@/lib/websiteAI";
 import {
   Loader2, Plus, Trash2, Eye, Code2, Edit3, Download,
   Copy, Zap, LayoutDashboard, Search, X, Check,
   Smartphone, Monitor, Tablet, RefreshCw,
-  Image as ImageIcon, ShoppingBag, Type, Palette, MousePointer2,
+  Image as ImageIcon, ShoppingBag, Type, Palette, MousePointer2, Upload, Wand2,
 } from "lucide-react";
 import {
   Dialog,
@@ -69,9 +70,8 @@ function injectEditor(html: string): string {
     "document.querySelectorAll('h1,h2,h3,h4,h5,h6,p,span,a,li,button,label').forEach(function(el){",
     "  el.setAttribute('contenteditable','true');",
     "  el.setAttribute('data-me','1');",
-    "  el.addEventListener('blur',function(){",
-    "    window.parent.postMessage({type:'matrix-edit',text:el.innerText},'*');",
-    "  });",
+    "  el.addEventListener('input',function(){window.parent.postMessage({type:'matrix-html-change',html:'<!DOCTYPE html>'+document.documentElement.outerHTML},'*');});",
+    "  el.addEventListener('blur',function(){window.parent.postMessage({type:'matrix-html-change',html:'<!DOCTYPE html>'+document.documentElement.outerHTML},'*');});",
     "});",
     "document.querySelectorAll('img').forEach(function(img){",
     "  img.style.cursor='pointer';",
@@ -84,6 +84,27 @@ function injectEditor(html: string): string {
     "</" + "script>",
   ].join("");
   return html.replace("</body>", script + "</body>");
+}
+
+async function fileToImageDataUrl(file: File, maxSize = 1200, quality = 0.82) {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxSize / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Image processing unavailable");
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
+function cleanHTML(html: string) {
+  return html.replace(/^```html\s*/i, "").replace(/^```\s*/, "").replace(/\s*```$/, "").trim();
+}
+
+function svgDataUrl(svg: string) {
+  return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
 }
 
 /* ------------------------------------------------------------------ */
